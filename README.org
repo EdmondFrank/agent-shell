@@ -19,8 +19,9 @@ Thank you!
 
 =agent-shell= brings your favorite AI agents to [[https://www.gnu.org/software/emacs/][Emacs]], keeping you at home: familiar buffers and bindings, no terminal emulation. All powered by ACP, the [[https://agentclientprotocol.com][Agent Client Protocol]].
 
-Works with 24 agents today, and any other that speaks ACP:
+Works with 25 agents today, and any other that speaks ACP:
 
+- [[https://aiderdesk.com][AiderDesk]]
 - [[https://antigravity.google/docs/ide/extensions][Antigravity]] (Google)
 - [[https://docs.augmentcode.com/cli/overview][Auggie]]
 - [[https://code.claude.com/docs/en/overview][Claude Agent]] (Anthropic)
@@ -333,6 +334,23 @@ agy acp --login
 #+end_src
 
 See https://antigravity.google/docs/ide/extensions/acp for details.
+
+*** AiderDesk
+
+For AiderDesk, install the =aiderdesk-acp-bridge= (the ACP adapter for the
+AiderDesk REST server) and make sure it's on your =PATH=.
+
+From the bridge's checkout, run:
+
+#+begin_src bash
+bun install
+bun link
+#+end_src
+
+or build a standalone binary with =bun run build=.  The AiderDesk server must
+be running locally (=aiderdesk= or =aiderdesk start=) before starting the
+shell, as the bridge connects to it over HTTP.  See https://aiderdesk.com for
+details.
 
 *** OpenClaw
 
@@ -869,6 +887,7 @@ Steering is not additive.  An agent that interrupts may drop the instruction it 
 
 Start a specific agent shell session directly:
 
+- =M-x agent-shell-aiderdesk-start-agent= - Start an AiderDesk agent session
 - =M-x agent-shell-antigravity-start-agent= - Start an Antigravity agent session
 - =M-x agent-shell-anthropic-start-claude-code= - Start a Claude Agent session
 - =M-x agent-shell-auggie-start-agent= - Start an Auggie agent session
@@ -1152,6 +1171,8 @@ always go to Evil modes if you need to with ~C-z~).
 |------------------------------------------------+---------------------------------------------------------------------------------|
 | agent-shell-activity-group-expand-by-default   | When activity group sections should be expanded.                                |
 | agent-shell-agent-configs                      | The known agent configurations.                                                 |
+| agent-shell-aiderdesk-acp-command              | Command and parameters for the AiderDesk ACP bridge.                            |
+| agent-shell-aiderdesk-environment              | Environment variables for the AiderDesk ACP bridge.                             |
 | agent-shell-anthropic-authentication           | Configuration for Anthropic authentication.                                     |
 | agent-shell-anthropic-claude-acp-command       | Command and parameters for the Anthropic Claude client.                         |
 | agent-shell-anthropic-claude-environment       | Environment variables for the Anthropic Claude client.                          |
@@ -1340,6 +1361,7 @@ always go to Evil modes if you need to with ~C-z~).
 |-------------------------------------------------------+---------------------------------------------------------+-------------------------------------------------------------------------------|
 | C-c C-w                                               | agent-shell                                             | Start or reuse an existing agent shell.                                       |
 |                                                       | agent-shell--display-buffer                             | Toggle agent SHELL-BUFFER display.                                            |
+|                                                       | agent-shell-aiderdesk-start-agent                       | Start an interactive AiderDesk agent shell.                                   |
 |                                                       | agent-shell-anthropic-start-claude-code                 | Start an interactive Claude Agent shell.                                      |
 |                                                       | agent-shell-antigravity-start-agent                     | Start an interactive Antigravity agent shell.                                 |
 |                                                       | agent-shell-artist-cancel                               | Discard the scratch art and close the buffer.                                 |

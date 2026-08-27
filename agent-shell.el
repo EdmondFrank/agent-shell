@@ -62,6 +62,7 @@
 (require 'agent-shell-artist)
 (require 'agent-shell-faces)
 (require 'agent-shell-markdown)
+(require 'agent-shell-aiderdesk)
 (require 'agent-shell-antigravity)
 (require 'agent-shell-anthropic)
 (require 'agent-shell-auggie)
@@ -842,7 +843,8 @@ reloads.
 This is the default value of `agent-shell-agent-configs'.  It is exposed
 so a function value for that variable can build on the defaults, for
 example filtering them.  See `agent-shell-agent-configs'."
-  (list #'agent-shell-antigravity-make-agent-config
+  (list #'agent-shell-aiderdesk-make-agent-config
+        #'agent-shell-antigravity-make-agent-config
         #'agent-shell-auggie-make-agent-config
         #'agent-shell-anthropic-make-claude-code-config
         #'agent-shell-codebuddy-make-agent-config
