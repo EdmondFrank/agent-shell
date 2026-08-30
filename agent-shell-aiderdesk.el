@@ -41,6 +41,11 @@
 (autoload 'agent-shell-make-agent-config "agent-shell")
 (declare-function agent-shell--make-acp-client "agent-shell")
 (declare-function agent-shell--dwim "agent-shell")
+(declare-function agent-shell--current-shell "agent-shell")
+(declare-function agent-shell--input "agent-shell")
+(declare-function agent-shell-cwd "agent-shell-project")
+(defvar agent-shell--state)
+(defvar comint-accum-marker)
 
 (defcustom agent-shell-aiderdesk-acp-command
   '("aiderdesk-acp-bridge")
@@ -110,6 +115,78 @@ authentication environment variables are required."
             (agent-shell--indent-string 4 "AiderDesk")
             "\n\n"
             message)))
+
+;;; Input history
+
+(defun agent-shell-aiderdesk--input-history-request (cwd)
+  "Build the `session/list_input_history' ACP request for CWD.
+
+CWD is normalized like `acp-make-session-list-request' so the bridge
+receives a trailing-slash-free absolute path."
+  `((:method . "session/list_input_history")
+    (:params . ((cwd . ,(directory-file-name (expand-file-name cwd)))))))
+
+(defun agent-shell-aiderdesk--fetch-input-history (shell-buffer)
+  "Return the project's AiderDesk input history for SHELL-BUFFER, newest first.
+
+Sends `session/list_input_history' to the AiderDesk ACP bridge, which
+forwards it to the server's `GET /api/project/input-history' — the
+same source AiderDesk's own input-history popup uses.  Returns nil
+when the request fails or yields no entries so callers degrade
+gracefully; refuses to run when the shell has no ACP client."
+  (let ((client (with-current-buffer shell-buffer
+                  (map-elt agent-shell--state :client))))
+    (when (null client)
+      (user-error "No ACP client for this shell"))
+    (condition-case nil
+        (let* ((cwd (with-current-buffer shell-buffer
+                      (agent-shell-cwd)))
+               (response (acp-send-request
+                          :client client
+                          :request (agent-shell-aiderdesk--input-history-request cwd)
+                          :buffer shell-buffer
+                          :sync t)))
+          (seq-remove #'string-empty-p (map-elt response 'inputs)))
+      (error nil))))
+
+;;;###autoload
+(defun agent-shell-aiderdesk-input-history ()
+  "List AiderDesk input history and insert the selection into the prompt.
+
+Fetches the project-level input history through the AiderDesk ACP
+bridge (`session/list_input_history', backed by the server's
+`GET /api/project/input-history') and offers the entries for selection
+via `completing-read', seeded with the current unsubmitted prompt text
+so typing narrows the list.  Selecting an entry replaces the
+unsubmitted prompt input.
+
+Reports \"No AiderDesk input history yet\" when there are no entries
+and refuses to run while the shell is busy."
+  (interactive)
+  (let* ((shell-buffer (or (agent-shell--current-shell)
+                           (user-error "Not in an agent shell buffer"))))
+    (when (with-current-buffer shell-buffer (shell-maker-busy))
+      (user-error "Shell is busy; wait for the response to finish"))
+    (let* ((current-input (with-current-buffer shell-buffer
+                            (agent-shell--input)))
+           (seed (or current-input ""))
+           (history (agent-shell-aiderdesk--fetch-input-history shell-buffer)))
+      (if (null history)
+          (message "No AiderDesk input history yet")
+        (let* ((collection (delete-dups (if (string-empty-p seed)
+                                            history
+                                          (cons seed history))))
+               (selected (completing-read
+                          "AiderDesk input history: " collection nil t
+                          seed
+                          'agent-shell-aiderdesk-input-history-history)))
+          (with-current-buffer shell-buffer
+            (let ((start (or (marker-position comint-accum-marker)
+                             (process-mark (get-buffer-process (current-buffer)))))
+                  (inhibit-read-only t))
+              (delete-region start (point-max))
+              (goto-char start)
+              (insert selected))))))))
 
 (provide 'agent-shell-aiderdesk)
 
