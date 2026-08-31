@@ -180,6 +180,21 @@ by default; restyle this face to colour or emphasise list markers."
 rendered by `agent-shell-markdown-convert'."
   :group 'agent-shell-markdown)
 
+(defcustom agent-shell-markdown-max-highlight-length 100000
+  "Maximum body length (in chars) to syntax-highlight a fenced code block.
+
+Font-locking a very large block (e.g. a tool returning tens of
+thousands of lines of diff or log output) costs seconds of
+single-threaded work, which freezes the UI while it streams in.
+Bodies larger than this limit render with the panel background,
+fence stripping, copy label, and frozen tag as usual, but skip the
+language-mode keyword colours (see
+`agent-shell-markdown--style-source-blocks').  Set to nil to always
+highlight, regardless of size."
+  :type '(choice (const :tag "Always highlight" nil)
+                 (integer :tag "Max block length in chars"))
+  :group 'agent-shell-markdown)
+
 (defvar agent-shell-markdown-image-max-width 0.4
   "Maximum width for inline images rendered from `![alt](url)'.
 An integer is taken as pixels.  A float between 0 and 1 is a
@@ -1520,7 +1535,9 @@ Open / streaming fences (no closing line yet) are left alone.
 When HIGHLIGHT-BLOCKS is nil, fences are still stripped and the
 action label inserted, but the body is left un-fontified (no
 language-mode keyword colours).  Useful when the caller wants the
-panel layout without paying the syntax-highlighting cost.
+panel layout without paying the syntax-highlighting cost.  Bodies
+longer than `agent-shell-markdown-max-highlight-length' are left
+un-fontified for the same reason.
 
 For example, the buffer:
 
@@ -1566,7 +1583,16 @@ with `emacs-lisp-mode' face properties on the body and a
                (close-start (match-beginning 5))
                (close-end (match-end 5))
                (source (buffer-substring-no-properties open-start close-end))
-               (highlighted (when highlight-blocks
+               ;; Font-locking a body this size costs seconds (single-
+               ;; threaded), so skip the language-mode colours past the
+               ;; `agent-shell-markdown-max-highlight-length' cap while
+               ;; keeping the panel styling below.
+               (highlighted (when (and highlight-blocks
+                                       (let ((limit (or agent-shell-markdown-max-highlight-length
+                                                        most-positive-fixnum)))
+                                         (<= (- (marker-position body-end)
+                                                (marker-position body-start))
+                                             limit)))
                               (agent-shell-markdown--highlight-code
                                (buffer-substring-no-properties body-start body-end)
                                lang))))

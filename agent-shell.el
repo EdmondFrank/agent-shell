@@ -3114,22 +3114,57 @@ Clears STATE's `:expanded-activity-group'."
             :event 'tool-call-update
             :data (list (cons :tool-call-id (map-nested-elt acp-notification '(params update toolCallId)))
                         (cons :tool-call (map-nested-elt state `(:tool-calls ,(map-nested-elt acp-notification '(params update toolCallId)))))))
-           (let* ((diffs (map-nested-elt state `(:tool-calls ,(map-nested-elt acp-notification '(params update toolCallId)) :diffs)))
+           (let* ((tool-call-id (map-nested-elt acp-notification '(params update toolCallId)))
+                  (diffs (map-nested-elt state `(:tool-calls ,tool-call-id :diffs)))
+                  ;; The update's accumulated tool output text (all content
+                  ;; blocks so far), re-derived deterministically from the
+                  ;; update.  Agents stream tool output by re-sending the
+                  ;; growing accumulated content on every tool_call_update,
+                  ;; so the render path must not re-render the whole body
+                  ;; per chunk: `delta-append' below appends only the newly
+                  ;; grown tail instead.
+                  (full-output (agent-shell--tool-call-update-output-markdown
+                                (map-nested-elt acp-notification '(params update))))
+                  ;; The accumulated output as the fragment body actually
+                  ;; shows it: the raw text with the surrounding `\n\n'
+                  ;; padding trimmed.  Delta bookkeeping keys off THIS, not
+                  ;; the raw output — tracking the raw text instead lets
+                  ;; the body trim eat whitespace at a chunk seam, after
+                  ;; which the grown tail merges into its preceding line
+                  ;; (a "line1\n" chunk followed by "line2\n" would render
+                  ;; "line1line2\n" instead of "line1\nline2\n").
+                  (trimmed-output (string-trim full-output))
                   (output (concat
                            "\n\n"
-                           (agent-shell--tool-call-update-output-markdown
-                            (map-nested-elt acp-notification '(params update)))
+                           full-output
                            "\n\n"))
                   (diff-text (agent-shell--format-diffs-as-text diffs))
                   (body-text (if diff-text
                                  (concat output "\n\n" diff-text)
                                output))
+                  ;; Output already written into the fragment body (tracked
+                  ;; below), nil until the first content-bearing update.
+                  (streamed-output (map-nested-elt state `(:tool-calls ,tool-call-id :streamed-output)))
+                  ;; Prefer appending the newly grown tail over replacing the
+                  ;; whole body: the existing per-chunk machinery then renders
+                  ;; only the delta (watermark-backed) instead of re-rendering
+                  ;; the accumulated body every chunk.  Diffs (rendered after
+                  ;; the output, so a growing output would need a mid-body
+                  ;; insert) and content resets (the re-derived output is no
+                  ;; longer a strict extension) fall back to the full replace.
+                  (delta-append (and (null diff-text)
+                                     streamed-output
+                                     (not (string-empty-p streamed-output))
+                                     (string-prefix-p streamed-output trimmed-output)
+                                     (> (length trimmed-output) (length streamed-output))))
+                  (output-delta (and delta-append
+                                     (substring trimmed-output (length streamed-output))))
                   ;; Whether this update introduces a new tool call rather than
                   ;; editing an earlier one in place.  Captured before the
                   ;; group-id helper assigns a group, so an in-place update
                   ;; does not look new.
                   (tool-newly-grouped
-                   (not (map-nested-elt state `(:tool-calls ,(map-nested-elt acp-notification '(params update toolCallId)) :group-id)))))
+                   (not (map-nested-elt state `(:tool-calls ,tool-call-id :group-id)))))
              ;; Log tool call to transcript when completed or failed
              (when (and (map-nested-elt acp-notification '(params update status))
                         (member (map-nested-elt acp-notification '(params update status)) '("completed" "failed")))
@@ -3153,10 +3188,9 @@ Clears STATE's `:expanded-activity-group'."
                ;; block-id must be the same as the one used as
                ;; agent-shell--update-fragment param by "session/request_permission".
                (agent-shell--delete-fragment :state state :block-id (format "permission-%s" (map-nested-elt acp-notification '(params update toolCallId)))))
-             (let* ((tool-call-labels (agent-shell-make-tool-call-label state (map-nested-elt acp-notification '(params update toolCallId))))
+             (let* ((tool-call-labels (agent-shell-make-tool-call-label state tool-call-id))
                     (group-id (agent-shell--activity-group-id
-                               state (map-nested-elt acp-notification '(params update toolCallId))))
-                    (tool-call-id (map-nested-elt acp-notification '(params update toolCallId)))
+                               state tool-call-id))
                     (saved-command (map-nested-elt state `(:tool-calls ,tool-call-id :command)))
                     ;; Prepend fenced command to body for Bash-like
                     ;; tools.
@@ -3177,21 +3211,44 @@ Clears STATE's `:expanded-activity-group'."
                                    (agent-shell--format-tool-call-input saved-input))))
                (agent-shell--update-fragment
                 :state state
-                :block-id (map-nested-elt acp-notification '(params update toolCallId))
+                :block-id tool-call-id
                 :label-left (map-elt tool-call-labels :status)
                 :label-right (map-elt tool-call-labels :title)
                 :group-id group-id
                 :group-label agent-shell--activity-group-label
                 :group-expanded (agent-shell--activity-group-initial-expanded-p)
-                :body (cond
-                       (command-block
-                        (concat command-block "\n\n" (string-trim body-text)))
-                       (input-block
-                        (concat input-block "\n\n" (string-trim body-text)))
-                       (t
-                        (string-trim body-text)))
+                :body (if delta-append
+                          output-delta
+                        (cond
+                         (command-block
+                          (concat command-block "\n\n" (string-trim body-text)))
+                         (input-block
+                          (concat input-block "\n\n" (string-trim body-text)))
+                         (t
+                          (string-trim body-text))))
+                :append delta-append
                 :expanded agent-shell-tool-use-expand-by-default
                 :above-last-prompt (not (agent-shell--active-requests-p state)))
+               ;; Track how much accumulated output has been written so the
+               ;; next update can append only its newly grown tail.  The
+               ;; entry carries at most one `:streamed-output' cursor (the
+               ;; previous one is dropped), and none at all once the call
+               ;; showed diffs: a diff-bearing body ends with the diff
+               ;; suffix after the output, so a later grown tail could only
+               ;; land after the diffs — future updates fall back to the
+               ;; full replace (output then diffs, in that order) instead.
+               (let* ((tool-call (map-nested-elt state `(:tool-calls ,tool-call-id)))
+                      (without-cursor
+                       (seq-remove (lambda (pair)
+                                     (eq (car pair) :streamed-output))
+                                   tool-call)))
+                 (map-put! (map-elt state :tool-calls)
+                           tool-call-id
+                           (if diff-text
+                               without-cursor
+                             (append without-cursor
+                                     (list (cons :streamed-output
+                                                 trimmed-output))))))
                (agent-shell--refresh-activity-group-header state group-id)
                (agent-shell--sync-activity-group-fold :state state :group-id group-id))
              ;; Only advance the run boundary when this update introduced a new
