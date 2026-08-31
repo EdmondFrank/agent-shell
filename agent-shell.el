@@ -3399,8 +3399,19 @@ No-op while that function has nothing to summarize (an empty group)."
     (agent-shell--update-fragment
      :state state
      :block-id group-id
-     :label-left label
+     :label-left (concat label
+                         (when (agent-shell--group-has-thought-p state group-id)
+                           (or (agent-shell--format-usage-summary (map-elt state :usage)) "")))
      :above-last-prompt (not (agent-shell--active-requests-p state)))))
+
+(defun agent-shell--refresh-latest-thought-group-header (state)
+  "Refresh the latest activity group's header in STATE when it holds a thought.
+
+Keeps the usage suffix on the current group's header current: called
+on `usage_update' notifications and once a turn's usage lands."
+  (when-let* ((group-id (agent-shell--activity-group-latest-id state))
+              ((agent-shell--group-has-thought-p state group-id)))
+    (agent-shell--refresh-activity-group-header state group-id)))
 
 (cl-defun agent-shell--sync-activity-group-fold (&key state group-id namespace-id)
   "Leave GROUP-ID the only expanded activity group in STATE.
@@ -3923,6 +3934,9 @@ Clears STATE's `:expanded-activity-group'."
             :event 'usage-update
             :data (list (cons :usage (map-elt state :usage))
                         (cons :meta (map-nested-elt acp-notification '(params update _meta)))))
+           ;; Refresh the current thought group's header so its usage
+           ;; suffix tracks the live context/cost data.
+           (agent-shell--refresh-latest-thought-group-header state)
            ;; Note: This is session-level state, no need to set :last-entry-type
            nil)
           ((equal (map-nested-elt acp-notification '(params update sessionUpdate)) "session_push_end")
@@ -9626,6 +9640,9 @@ reads the buffer's prompt capabilities."
                    ;; Extract usage information from response
                    (when (map-elt acp-response 'usage)
                      (agent-shell--save-usage :state (agent-shell--state) :acp-usage (map-elt acp-response 'usage)))
+                   ;; The token breakdown landed: refresh the current
+                   ;; thought group's header so its usage suffix is complete.
+                   (agent-shell--refresh-latest-thought-group-header (agent-shell--state))
                    (let ((success (equal (map-elt acp-response 'stopReason)
                                          "end_turn")))
                      ;; Display usage box at end of turn if enabled and data available
