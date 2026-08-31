@@ -108,5 +108,112 @@
         (should (equal (buffer-string) "prompt B"))
         (should (equal seen-seed ""))))))
 
+(ert-deftest agent-shell-aiderdesk-history-cycling-test ()
+  "M-<up> walks older entries; M-<down> walks back and restores input."
+  (cl-letf (((symbol-function 'shell-maker-busy) (lambda () nil))
+            ((symbol-function 'agent-shell-aiderdesk--fetch-input-history)
+             (lambda (_shell-buffer) '("newest" "middle" "oldest"))))
+    (with-temp-buffer
+      (insert "typed input")
+      (setq-local comint-accum-marker (copy-marker (point-min)))
+      (agent-shell-aiderdesk-previous-input)
+      (should (equal (buffer-string) "newest"))
+      (agent-shell-aiderdesk-previous-input)
+      (should (equal (buffer-string) "middle"))
+      (agent-shell-aiderdesk-previous-input)
+      (should (equal (buffer-string) "oldest"))
+      (agent-shell-aiderdesk-next-input)
+      (should (equal (buffer-string) "middle"))
+      (agent-shell-aiderdesk-next-input)
+      (should (equal (buffer-string) "newest"))
+      (agent-shell-aiderdesk-next-input)
+      (should (equal (buffer-string) "typed input"))
+      (should (null agent-shell-aiderdesk--history-pos))
+      (should (null agent-shell-aiderdesk--history-snapshot))
+      (should (null agent-shell-aiderdesk--history-entries)))))
+
+(ert-deftest agent-shell-aiderdesk-history-cache-until-walk-ends-test ()
+  "The walk refetches history only after returning to the original input."
+  (let ((fetch-count 0))
+    (cl-letf (((symbol-function 'shell-maker-busy) (lambda () nil))
+              ((symbol-function 'agent-shell-aiderdesk--fetch-input-history)
+               (lambda (_shell-buffer)
+                 (cl-incf fetch-count)
+                 '("newest" "older"))))
+      (with-temp-buffer
+        (setq-local comint-accum-marker (copy-marker (point-min)))
+        (agent-shell-aiderdesk-previous-input)
+        (agent-shell-aiderdesk-previous-input)
+        (should (equal fetch-count 1))
+        (agent-shell-aiderdesk-next-input)
+        (agent-shell-aiderdesk-next-input)
+        (should (null agent-shell-aiderdesk--history-pos))
+        ;; A fresh walk fetches again.
+        (agent-shell-aiderdesk-previous-input)
+        (should (equal fetch-count 2))))))
+
+(ert-deftest agent-shell-aiderdesk-history-restores-empty-input-test ()
+  "Navigating from an empty prompt restores the empty prompt."
+  (cl-letf (((symbol-function 'shell-maker-busy) (lambda () nil))
+            ((symbol-function 'agent-shell-aiderdesk--fetch-input-history)
+             (lambda (_shell-buffer) '("newest"))))
+    (with-temp-buffer
+      (setq-local comint-accum-marker (copy-marker (point-min)))
+      (agent-shell-aiderdesk-previous-input)
+      (should (equal (buffer-string) "newest"))
+      (agent-shell-aiderdesk-next-input)
+      (should (equal (buffer-string) "")))))
+
+(ert-deftest agent-shell-aiderdesk-history-beginning-test ()
+  "M-<up> errors past the oldest entry."
+  (cl-letf (((symbol-function 'shell-maker-busy) (lambda () nil))
+            ((symbol-function 'agent-shell-aiderdesk--fetch-input-history)
+             (lambda (_shell-buffer) '("newest" "older"))))
+    (with-temp-buffer
+      (setq-local comint-accum-marker (copy-marker (point-min)))
+      (agent-shell-aiderdesk-previous-input)
+      (agent-shell-aiderdesk-previous-input)
+      (should-error (agent-shell-aiderdesk-previous-input)
+                    :type 'user-error))))
+
+(ert-deftest agent-shell-aiderdesk-history-no-newer-test ()
+  "M-<down> without navigating first reports end of history."
+  (with-temp-buffer
+    (setq-local comint-accum-marker (copy-marker (point-min)))
+    (should-error (agent-shell-aiderdesk-next-input)
+                  :type 'user-error)))
+
+(ert-deftest agent-shell-aiderdesk-history-empty-test ()
+  "M-<up> reports when there is no history."
+  (cl-letf (((symbol-function 'shell-maker-busy) (lambda () nil))
+            ((symbol-function 'agent-shell-aiderdesk--fetch-input-history)
+             (lambda (_shell-buffer) nil)))
+    (with-temp-buffer
+      (setq-local comint-accum-marker (copy-marker (point-min)))
+      (should-error (agent-shell-aiderdesk-previous-input)
+                    :type 'user-error))))
+
+(ert-deftest agent-shell-aiderdesk-history-busy-test ()
+  "A busy shell refuses history navigation."
+  (cl-letf (((symbol-function 'shell-maker-busy) (lambda () t))
+            ((symbol-function 'agent-shell-aiderdesk--fetch-input-history)
+             (lambda (_shell-buffer) (error "fetch must not run"))))
+    (with-temp-buffer
+      (setq-local comint-accum-marker (copy-marker (point-min)))
+      (should-error (agent-shell-aiderdesk-previous-input)
+                    :type 'user-error))))
+
+(ert-deftest agent-shell-aiderdesk-history-outside-input-test ()
+  "History navigation is refused when point is above the prompt input."
+  (cl-letf (((symbol-function 'shell-maker-busy) (lambda () nil))
+            ((symbol-function 'agent-shell-aiderdesk--fetch-input-history)
+             (lambda (_shell-buffer) (error "fetch must not run"))))
+    (with-temp-buffer
+      (insert "conversation output\n")
+      (setq-local comint-accum-marker (copy-marker (point-max)))
+      (goto-char (point-min))
+      (should-error (agent-shell-aiderdesk-previous-input)
+                    :type 'user-error))))
+
 (provide 'agent-shell-aiderdesk-tests)
 ;;; agent-shell-aiderdesk-tests.el ends here

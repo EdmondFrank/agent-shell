@@ -2718,6 +2718,9 @@ mouse selection or a kill where mark > point) is normalized."
         (if (get-text-property 0 'agent-shell-block-quote match) "" match))
       text nil t))))
 
+(declare-function agent-shell-aiderdesk-previous-input "agent-shell-aiderdesk")
+(declare-function agent-shell-aiderdesk-next-input "agent-shell-aiderdesk")
+
 (defvar-keymap agent-shell-mode-map
   :parent shell-maker-mode-map
   :doc "Keymap for `agent-shell-mode'."
@@ -2737,6 +2740,8 @@ mouse selection or a kill where mark > point) is normalized."
   "C-c C-t" #'agent-shell-set-session-thought-level
   "C-c C-o" #'agent-shell-other-buffer
   "C-c C-s" #'agent-shell-set-session-config-option
+  "M-<up>" #'agent-shell-aiderdesk-previous-input
+  "M-<down>" #'agent-shell-aiderdesk-next-input
   "<remap> <yank>" #'agent-shell-yank-dwim
   "<remap> <comint-send-input>" #'agent-shell-submit
   ;; No equivalent in comint, bind explicitly.
