@@ -2282,6 +2282,65 @@ It's **bold**.
 
 " (agent-shell-markdown-source-block))))))
 
+(ert-deftest agent-shell-markdown-convert-source-block-over-highlight-cap-unfontified ()
+  "Bodies past `agent-shell-markdown-max-highlight-length' skip font-lock.
+Regression guard for the streaming-render cap: a huge tool output block
+must not pay seconds of language-mode font-locking, while keeping the
+panel, label, and frozen (avoid-range) behavior intact."
+  (let ((agent-shell-markdown-max-highlight-length 2))
+    (let ((rendered (agent-shell-markdown-convert
+                     "```emacs-lisp\n(if t nil)\n```")))
+      ;; No language-mode keyword faces: the `if' keyword stays plain
+      ;; panel text rather than gaining `font-lock-keyword-face'.
+      (should (equal (agent-shell-markdown--deconstruct rendered)
+                     '(("\n" (agent-shell-markdown-source-block))
+                       ("emacs-lisp ⧉" (agent-shell-markdown-source-block-language))
+                       ("\n\n(if t nil)\n\n" (agent-shell-markdown-source-block)))))
+      ;; Body chars still carry the frozen (avoid-range) tag so later
+      ;; streaming chunks skip them.
+      (let ((body-pos (string-match "(" rendered)))
+        (should (eq t (get-text-property body-pos
+                                         'agent-shell-markdown-frozen rendered))))))
+  ;; Below the cap the language faces still apply (default behavior).
+  (let ((agent-shell-markdown-max-highlight-length most-positive-fixnum))
+    (should (equal (agent-shell-markdown--deconstruct
+                    (agent-shell-markdown-convert
+                     "```emacs-lisp\n(if t nil)\n```"))
+                   '(("\n" (agent-shell-markdown-source-block))
+                     ("emacs-lisp ⧉" (agent-shell-markdown-source-block-language))
+                     ("\n\n(" (agent-shell-markdown-source-block))
+                     ("if" (font-lock-keyword-face agent-shell-markdown-source-block))
+                     (" t nil)\n\n" (agent-shell-markdown-source-block)))))))
+
+(ert-deftest agent-shell-markdown-source-block-streamed-completes-with-language-faces ()
+  "A fenced block split across streamed chunks gains language faces on close.
+
+The watermark backs off past an open fenced block, so the chunk that
+carries the closing fence re-scans from the opening fence and renders
+the whole block in one go — fences stripped, the language label
+inserted and, under the highlight cap, the body font-locked with the
+language's keyword faces.  Guards the streaming-render path against
+future watermark regressions (the tool-call delta-append path relies
+on it)."
+  (with-temp-buffer
+    ;; Opening fence + partial body, no closing fence yet.
+    (insert "\n\n```emacs-lisp\n(if t nil)\n")
+    (agent-shell-markdown-replace-markup)
+    ;; The open block stays raw until the closing fence lands.
+    (should (string-match-p "```" (buffer-string)))
+    (should-not (string-match-p "⧉" (buffer-string)))
+    ;; Closing fence lands in a later chunk (a delta append).
+    (goto-char (point-max))
+    (insert "```\n\n")
+    (agent-shell-markdown-replace-markup)
+    (let ((s (buffer-string)))
+      (should-not (string-match-p "```" (substring-no-properties s)))
+      (should (string-match-p "emacs-lisp ⧉" (substring-no-properties s)))
+      (let ((pos (string-match "if" (substring-no-properties s))))
+        (should (memq 'font-lock-keyword-face
+                      (ensure-list (get-text-property pos 'face s))))
+        (should (eq t (get-text-property pos 'agent-shell-markdown-frozen s)))))))
+
 (ert-deftest agent-shell-markdown-highlight-code-delays-mode-hooks-locally ()
   "Highlighting code should not delay mode hooks in another buffer."
   (with-temp-buffer

@@ -7711,6 +7711,233 @@ completion) and renders no lasting interleaved content."
                      (map-nested-elt state '(:tool-calls "B" :group-id)))))
       (kill-buffer buffer))))
 
+(ert-deftest agent-shell--tool-call-output-incremental-append-test ()
+  "Streaming tool output appends deltas instead of replacing the whole body.
+Agents re-send the growing accumulated output on every tool_call_update.
+Replacing the whole body each time made the render path re-render (and
+re-font-lock) the accumulated body per chunk — quadratic in the total
+output.  A strict prefix extension must append only the newly grown tail
+and advance the tracked `:streamed-output' cursor."
+  (let ((state (agent-shell--make-state))
+        (calls nil))
+    (map-put! state :active-requests t)
+    (cl-letf (((symbol-function 'agent-shell--update-fragment)
+               (lambda (&rest args)
+                 (push (list (cons :body (plist-get args :body))
+                             (cons :append (plist-get args :append)))
+                       calls)))
+              ((symbol-function 'agent-shell--refresh-activity-group-header) #'ignore)
+              ((symbol-function 'agent-shell--sync-activity-group-fold) #'ignore)
+              ((symbol-function 'agent-shell--append-transcript) #'ignore)
+              ((symbol-function 'agent-shell--make-transcript-tool-call-entry)
+               (lambda (&rest _) ""))
+              ((symbol-function 'agent-shell--delete-fragment) #'ignore)
+              ((symbol-function 'agent-shell--cancel-idle-timer) #'ignore)
+              ((symbol-function 'agent-shell--emit-event) #'ignore)
+              ((symbol-function 'agent-shell-make-tool-call-label)
+               (lambda (&rest _) '((:status . "s") (:title . "t")))))
+      (cl-flet ((notify (update)
+                  (agent-shell--on-notification
+                   :state state
+                   :acp-notification `((method . "session/update")
+                                       (params (update . ,update))))))
+        (notify '((sessionUpdate . "tool_call") (toolCallId . "A")
+                  (title . "A") (kind . "other") (status . "pending")))
+        ;; First output-bearing update writes the full (trimmed) body.
+        (notify '((sessionUpdate . "tool_call_update") (toolCallId . "A")
+                  (status . "running")
+                  (content . [((type . "content")
+                               (content (type . "text") (text . "build started")))])))
+        ;; Accumulated output grows...
+        (notify '((sessionUpdate . "tool_call_update") (toolCallId . "A")
+                  (status . "running")
+                  (content . [((type . "content")
+                               (content (type . "text")
+                                        (text . "build started\ncompiling")))])))
+        ;; ...and completes.
+        (notify '((sessionUpdate . "tool_call_update") (toolCallId . "A")
+                  (status . "completed")
+                  (content . [((type . "content")
+                               (content (type . "text")
+                                        (text . "build started\ncompiling\ndone")))]))))
+      ;; (calls is newest-first.)
+      (let ((first (nth 2 calls)))
+        (should (equal (map-elt first :body) "build started"))
+        (should-not (map-elt first :append)))
+      (let ((second (nth 1 calls)))
+        (should (equal (map-elt second :body) "\ncompiling"))
+        (should (map-elt second :append)))
+      (let ((third (nth 0 calls)))
+        (should (equal (map-elt third :body) "\ndone"))
+        (should (map-elt third :append)))
+      (should (equal (map-nested-elt state '(:tool-calls "A" :streamed-output))
+                     "build started\ncompiling\ndone")))))
+
+(ert-deftest agent-shell--tool-call-output-reset-falls-back-to-replace-test ()
+  "A content reset (no longer a strict extension) falls back to a full replace.
+Guards the growing-prefix assumption: agents that restart output mid-flight
+(or send structured/replaced blocks) must not interleave stale deltas into
+the body."
+  (let ((state (agent-shell--make-state))
+        (calls nil))
+    (map-put! state :active-requests t)
+    (cl-letf (((symbol-function 'agent-shell--update-fragment)
+               (lambda (&rest args)
+                 (push (list (cons :body (plist-get args :body))
+                             (cons :append (plist-get args :append)))
+                       calls)))
+              ((symbol-function 'agent-shell--refresh-activity-group-header) #'ignore)
+              ((symbol-function 'agent-shell--sync-activity-group-fold) #'ignore)
+              ((symbol-function 'agent-shell--append-transcript) #'ignore)
+              ((symbol-function 'agent-shell--make-transcript-tool-call-entry)
+               (lambda (&rest _) ""))
+              ((symbol-function 'agent-shell--delete-fragment) #'ignore)
+              ((symbol-function 'agent-shell--cancel-idle-timer) #'ignore)
+              ((symbol-function 'agent-shell--emit-event) #'ignore)
+              ((symbol-function 'agent-shell-make-tool-call-label)
+               (lambda (&rest _) '((:status . "s") (:title . "t")))))
+      (cl-flet ((notify (update)
+                  (agent-shell--on-notification
+                   :state state
+                   :acp-notification `((method . "session/update")
+                                       (params (update . ,update))))))
+        (notify '((sessionUpdate . "tool_call") (toolCallId . "A")
+                  (title . "A") (kind . "other") (status . "pending")))
+        (notify '((sessionUpdate . "tool_call_update") (toolCallId . "A")
+                  (status . "running")
+                  (content . [((type . "content")
+                               (content (type . "text") (text . "build started")))])))
+        ;; Content is re-derived from scratch — no longer a prefix extension.
+        (notify '((sessionUpdate . "tool_call_update") (toolCallId . "A")
+                  (status . "completed")
+                  (content . [((type . "content")
+                               (content (type . "text") (text . "restarted")))]))))
+      (let ((last (nth 0 calls)))
+        (should (equal (map-elt last :body) "restarted"))
+        (should-not (map-elt last :append)))
+      (should (equal (map-nested-elt state '(:tool-calls "A" :streamed-output))
+                     "restarted")))))
+
+(ert-deftest agent-shell--tool-call-output-seam-newline-test ()
+  "Line-delimited chunks keep the newline at each seam.
+
+The first chunk's rendered body is `string-trim'med, so deltas must be
+derived from the trimmed accumulated output.  Tracking the raw output
+instead made a chunk ending in a newline (line-buffered tool output)
+merge with the following chunk's text: \"line1\n\" / \"line1\nline2\n\"
+rendered \"line1line2\n\" instead of \"line1\nline2\n\"."
+  (let ((state (agent-shell--make-state))
+        (calls nil))
+    (map-put! state :active-requests t)
+    (cl-letf (((symbol-function 'agent-shell--update-fragment)
+               (lambda (&rest args)
+                 (push (list (cons :body (plist-get args :body))
+                             (cons :append (plist-get args :append)))
+                       calls)))
+              ((symbol-function 'agent-shell--refresh-activity-group-header) #'ignore)
+              ((symbol-function 'agent-shell--sync-activity-group-fold) #'ignore)
+              ((symbol-function 'agent-shell--append-transcript) #'ignore)
+              ((symbol-function 'agent-shell--make-transcript-tool-call-entry)
+               (lambda (&rest _) ""))
+              ((symbol-function 'agent-shell--delete-fragment) #'ignore)
+              ((symbol-function 'agent-shell--cancel-idle-timer) #'ignore)
+              ((symbol-function 'agent-shell--emit-event) #'ignore)
+              ((symbol-function 'agent-shell-make-tool-call-label)
+               (lambda (&rest _) '((:status . "s") (:title . "t")))))
+      (cl-flet ((notify (update)
+                  (agent-shell--on-notification
+                   :state state
+                   :acp-notification `((method . "session/update")
+                                       (params (update . ,update))))))
+        (notify '((sessionUpdate . "tool_call") (toolCallId . "A")
+                  (title . "A") (kind . "other") (status . "pending")))
+        ;; Accumulated output ends in a newline: the body trim eats it, so
+        ;; only the trimmed cursor can keep the seam.
+        (notify '((sessionUpdate . "tool_call_update") (toolCallId . "A")
+                  (status . "running")
+                  (content . [((type . "content")
+                               (content (type . "text") (text . "line1\n")))])))
+        ;; Next line grows the accumulated output.
+        (notify '((sessionUpdate . "tool_call_update") (toolCallId . "A")
+                  (status . "completed")
+                  (content . [((type . "content")
+                               (content (type . "text")
+                                        (text . "line1\nline2\n")))]))))
+      ;; (calls is newest-first.)
+      (let ((first (nth 1 calls)))
+        (should (equal (map-elt first :body) "line1"))
+        (should-not (map-elt first :append)))
+      ;; The grown tail must carry the newline the trim consumed, so the
+      ;; two chunks read "line1" + "\nline2" -> "line1\nline2".
+      (let ((last (nth 0 calls)))
+        (should (equal (map-elt last :body) "\nline2"))
+        (should (map-elt last :append)))
+      (should (equal (map-nested-elt state '(:tool-calls "A" :streamed-output))
+                     "line1\nline2")))))
+
+(ert-deftest agent-shell--tool-call-output-with-diffs-never-appends-test ()
+  "A tool call that carried diffs never delta-appends.
+
+Diffs render after the output, so a grown tail inside an append would
+land after the diff section rather than extending the output.  The
+streamed-output cursor is dropped on diff-bearing updates, so any
+follow-up falls back to the full replace (output then diffs, in that
+order) even if the diffs were later dropped from state."
+  (let ((state (agent-shell--make-state))
+        (calls nil))
+    (map-put! state :active-requests t)
+    (cl-letf (((symbol-function 'agent-shell--update-fragment)
+               (lambda (&rest args)
+                 (push (list (cons :body (plist-get args :body))
+                             (cons :append (plist-get args :append)))
+                       calls)))
+              ((symbol-function 'agent-shell--refresh-activity-group-header) #'ignore)
+              ((symbol-function 'agent-shell--sync-activity-group-fold) #'ignore)
+              ((symbol-function 'agent-shell--append-transcript) #'ignore)
+              ((symbol-function 'agent-shell--make-transcript-tool-call-entry)
+               (lambda (&rest _) ""))
+              ((symbol-function 'agent-shell--delete-fragment) #'ignore)
+              ((symbol-function 'agent-shell--cancel-idle-timer) #'ignore)
+              ((symbol-function 'agent-shell--emit-event) #'ignore)
+              ((symbol-function 'agent-shell-make-tool-call-label)
+               (lambda (&rest _) '((:status . "s") (:title . "t")))))
+      (cl-flet ((notify (update)
+                  (agent-shell--on-notification
+                   :state state
+                   :acp-notification `((method . "session/update")
+                                       (params (update . ,update))))))
+        (notify '((sessionUpdate . "tool_call") (toolCallId . "A")
+                  (title . "A") (kind . "other") (status . "pending")))
+        ;; A running update carrying a diff content block alongside output.
+        (notify '((sessionUpdate . "tool_call_update") (toolCallId . "A")
+                  (status . "running")
+                  (content . [((type . "diff")
+                               (oldText . "a\nb") (newText . "a\nc") (path . "f"))
+                              ((type . "content")
+                               (content (type . "text") (text . "build started")))])))
+        ;; Defensive case: diffs dropped from state mid-stream.  The cursor
+        ;; was dropped with the diff-bearing update, so this one replaces.
+        (map-put! (map-elt state :tool-calls) "A"
+                  (assq-delete-all :diffs (map-elt state '(:tool-calls "A"))))
+        (notify '((sessionUpdate . "tool_call_update") (toolCallId . "A")
+                  (status . "completed")
+                  (content . [((type . "content")
+                               (content (type . "text")
+                                        (text . "build started\ncompiling")))]))))
+      ;; (calls is newest-first.)  Diff-bearing update: full replace, output
+      ;; first, boxed diff section after.
+      (let ((diff-bearing (nth 1 calls)))
+        (should-not (map-elt diff-bearing :append))
+        (should (string-prefix-p "build started" (map-elt diff-bearing :body)))
+        (should (string-search "│" (map-elt diff-bearing :body))))
+      ;; Diff-less follow-up: still a full replace, never an append, so the
+      ;; output stays one contiguous block with no diff interleaved.
+      (let ((diff-less (nth 0 calls)))
+        (should-not (map-elt diff-less :append))
+        (should (equal (map-elt diff-less :body) "build started\ncompiling")))
+      (should (equal (map-nested-elt state '(:tool-calls "A" :streamed-output))
+                     "build started\ncompiling")))))
+
 (ert-deftest agent-shell--activity-group-header-label-test ()
   "Header glyph is `completed' only when every member is.
 Otherwise it shows the worst status present, and the completed/total
