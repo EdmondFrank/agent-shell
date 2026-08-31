@@ -35,6 +35,7 @@
   (require 'cl-lib))
 (require 'shell-maker)
 (require 'acp)
+(require 'agent-shell-config)
 
 (declare-function agent-shell--indent-string "agent-shell")
 (declare-function agent-shell-make-agent-config "agent-shell")
@@ -43,6 +44,8 @@
 (declare-function agent-shell--dwim "agent-shell")
 (declare-function agent-shell--current-shell "agent-shell")
 (declare-function agent-shell--input "agent-shell")
+(declare-function agent-shell--set-session-config-option "agent-shell")
+(declare-function agent-shell--state "agent-shell")
 (declare-function agent-shell-cwd "agent-shell-project")
 (defvar agent-shell--state)
 (defvar comint-accum-marker)
@@ -187,6 +190,168 @@ and refuses to run while the shell is busy."
               (delete-region start (point-max))
               (goto-char start)
               (insert selected))))))))
+
+;;; History cycling in the prompt
+
+(defvar-local agent-shell-aiderdesk--history-entries nil
+  "Cached AiderDesk input history, newest first.
+nil until the first fetch; reset when `agent-shell-aiderdesk-next-input'
+returns to the user's own input so a later walk picks up new entries.")
+
+(defvar-local agent-shell-aiderdesk--history-pos nil
+  "Index into `agent-shell-aiderdesk--history-entries' currently shown.
+nil when the prompt shows the user's own input rather than a history entry.")
+
+(defvar-local agent-shell-aiderdesk--history-snapshot nil
+  "Prompt input captured before the first history navigation.
+Restored when `agent-shell-aiderdesk-next-input' runs out of entries.")
+
+(defun agent-shell-aiderdesk--prompt-start ()
+  "Return the buffer position where the active prompt input starts.
+Returns nil when the input area cannot be determined."
+  (or (and (boundp 'comint-accum-marker)
+           (marker-position comint-accum-marker))
+      (when-let* ((proc (get-buffer-process (current-buffer))))
+        (process-mark proc))))
+
+(defun agent-shell-aiderdesk--replace-prompt-input (text)
+  "Replace the unsubmitted prompt input with TEXT, leaving point at the end."
+  (let ((start (agent-shell-aiderdesk--prompt-start))
+        (inhibit-read-only t))
+    (unless start
+      (user-error "Not at command input"))
+    (delete-region start (point-max))
+    (goto-char start)
+    (insert text)))
+
+(defun agent-shell-aiderdesk--history-navigation-check ()
+  "Validate the shell and prompt input area for history navigation."
+  (let ((start (agent-shell-aiderdesk--prompt-start)))
+    (unless start
+      (user-error "Not at command input"))
+    (when (< (point) start)
+      (user-error "Not at command input"))
+    (when (shell-maker-busy)
+      (user-error "Shell is busy; wait for the response to finish"))))
+
+(defun agent-shell-aiderdesk--history-entries-or-fetch ()
+  "Return cached or freshly fetched AiderDesk input history, newest first."
+  (or agent-shell-aiderdesk--history-entries
+      (setq agent-shell-aiderdesk--history-entries
+            (agent-shell-aiderdesk--fetch-input-history (current-buffer)))))
+
+;;;###autoload
+(defun agent-shell-aiderdesk-previous-input ()
+  "Cycle backwards through AiderDesk input history into the prompt.
+
+Fetches the project-level input history through the AiderDesk ACP
+bridge (`session/list_input_history') on first use, then inserts each
+entry into the unsubmitted prompt input walking newest to oldest.
+The in-progress input is saved on the first step and restored by
+`agent-shell-aiderdesk-next-input' once history runs out.
+
+Reports \"No AiderDesk input history yet\" when there are no entries
+and refuses to run while the shell is busy."
+  (interactive)
+  (agent-shell-aiderdesk--history-navigation-check)
+  (let ((entries (agent-shell-aiderdesk--history-entries-or-fetch)))
+    (when (null entries)
+      (user-error "No AiderDesk input history yet"))
+    (when (null agent-shell-aiderdesk--history-snapshot)
+      (setq agent-shell-aiderdesk--history-snapshot
+            (buffer-substring (agent-shell-aiderdesk--prompt-start) (point-max))))
+    (let ((next (if agent-shell-aiderdesk--history-pos
+                    (1+ agent-shell-aiderdesk--history-pos)
+                  0)))
+      (when (>= next (length entries))
+        (user-error "Beginning of history; no preceding item"))
+      (setq agent-shell-aiderdesk--history-pos next)
+      (agent-shell-aiderdesk--replace-prompt-input (nth next entries)))))
+
+;;;###autoload
+(defun agent-shell-aiderdesk-next-input ()
+  "Cycle forwards through AiderDesk input history into the prompt.
+
+Walks newer entries and finally restores the input saved when
+`agent-shell-aiderdesk-previous-input' started navigating.
+Reports \"End of history\" when not navigating."
+  (interactive)
+  (unless agent-shell-aiderdesk--history-pos
+    (user-error "End of history; no newer item"))
+  (agent-shell-aiderdesk--history-navigation-check)
+  (let ((next (1- agent-shell-aiderdesk--history-pos)))
+    (if (< next 0)
+        (agent-shell-aiderdesk--restore-original-input)
+      (setq agent-shell-aiderdesk--history-pos next)
+      (agent-shell-aiderdesk--replace-prompt-input
+       (nth next agent-shell-aiderdesk--history-entries)))))
+
+(defun agent-shell-aiderdesk--restore-original-input ()
+  "Restore the input saved before history navigation and reset the walk."
+  (agent-shell-aiderdesk--replace-prompt-input
+   (or agent-shell-aiderdesk--history-snapshot ""))
+  (setq agent-shell-aiderdesk--history-pos nil
+        agent-shell-aiderdesk--history-snapshot nil
+        agent-shell-aiderdesk--history-entries nil))
+
+;;; Quick session switching
+
+(defun agent-shell-aiderdesk--set-config-option-by-id (option-id prompt)
+  "Set the session config option with ID OPTION-ID via one prompt.
+
+PROMPT is shown while picking among the option's values, with the
+current value as default.  Errors out with a user-error when the
+session does not expose the option or the value is unknown, so
+callers degrade loudly rather than silently no-op."
+  (let* ((state (agent-shell--state))
+         (option (agent-shell--config-option-get :state state :id option-id)))
+    (unless option
+      (user-error "Session has no %s option" option-id))
+    (let* ((current-value (map-elt option :current-value))
+           (default-name (agent-shell--config-option-value-name option current-value))
+           (choices (mapcar (lambda (value)
+                              (cons (map-elt value :name)
+                                    (map-elt value :value)))
+                            (map-elt option :options)))
+           (selection (completing-read prompt
+                                       (mapcar #'car choices)
+                                       nil t nil nil default-name))
+           (selected-value (cdr (seq-find (lambda (choice)
+                                            (string= selection (car choice)))
+                                          choices))))
+      (unless selected-value
+        (user-error "Unknown %s: %s" option-id selection))
+      (when (equal selected-value current-value)
+        (user-error "%s already %s" option-id selection))
+      (agent-shell--set-session-config-option
+       :config-id option-id
+       :value selected-value
+       :on-success (lambda ()
+                     (message "%s: %s" option-id
+                              (agent-shell--config-option-value-name
+                               option selected-value)))))))
+
+;;;###autoload
+(defun agent-shell-aiderdesk-set-agent-profile ()
+  "Quick switch the session's agent profile.
+
+Prompts once for the profile using the `agent_profile' session config
+option and applies the selection through `session/set_config_option'.
+Errors when the current session mode does not expose agent profiles."
+  (interactive)
+  (agent-shell-aiderdesk--set-config-option-by-id
+   "agent_profile" "Agent profile: "))
+
+;;;###autoload
+(defun agent-shell-aiderdesk-set-autonomy-mode ()
+  "Quick switch the session's autonomy mode.
+
+Prompts once for the autonomy mode using the `autonomy_mode' session
+config option and applies the selection through
+`session/set_config_option'."
+  (interactive)
+  (agent-shell-aiderdesk--set-config-option-by-id
+   "autonomy_mode" "Autonomy mode: "))
 
 (provide 'agent-shell-aiderdesk)
 

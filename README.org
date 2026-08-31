@@ -1145,6 +1145,9 @@ always go to Evil modes if you need to with ~C-z~).
 |-----------------+---------------------------------------------------------+-------------------------------------------------------------------------------|
 |                 | agent-shell                                             | Start or reuse an existing agent shell.                                       |
 |                 | agent-shell--display-buffer                             | Toggle agent SHELL-BUFFER display.                                            |
+|                 | agent-shell-aiderdesk-input-history                     | List AiderDesk input history and insert the selection into the prompt.        |
+| M-<down>        | agent-shell-aiderdesk-next-input                        | Cycle forwards through AiderDesk input history into the prompt.               |
+| M-<up>          | agent-shell-aiderdesk-previous-input                    | Cycle backwards through AiderDesk input history into the prompt.              |
 |                 | agent-shell-aiderdesk-start-agent                       | Start an interactive AiderDesk agent shell.                                   |
 |                 | agent-shell-anthropic-start-claude-code                 | Start an interactive Claude Agent shell.                                      |
 |                 | agent-shell-antigravity-start-agent                     | Start an interactive Antigravity agent shell.                                 |

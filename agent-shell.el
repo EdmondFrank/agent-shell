@@ -2115,6 +2115,9 @@ copy depending on selection direction."
                             text)
     text))
 
+(declare-function agent-shell-aiderdesk-previous-input "agent-shell-aiderdesk")
+(declare-function agent-shell-aiderdesk-next-input "agent-shell-aiderdesk")
+
 (defvar-keymap agent-shell-mode-map
   :parent shell-maker-mode-map
   :doc "Keymap for `agent-shell-mode'."
@@ -2134,6 +2137,8 @@ copy depending on selection direction."
   "C-c C-t" #'agent-shell-set-session-thought-level
   "C-c C-o" #'agent-shell-other-buffer
   "C-c C-s" #'agent-shell-set-session-config-option
+  "M-<up>" #'agent-shell-aiderdesk-previous-input
+  "M-<down>" #'agent-shell-aiderdesk-next-input
   "<remap> <yank>" #'agent-shell-yank-dwim
   "<remap> <comint-send-input>" #'agent-shell-submit)
 
