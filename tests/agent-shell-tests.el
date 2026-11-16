@@ -11140,3 +11140,41 @@ with its streamed continuations, so batching a flush cannot drop it."
                             (plist-get (car rendered) :body))))
         (should (equal 3 (plist-get (cadr rendered) :max-height)))
         (should-not (plist-get (cadr rendered) :append))))))
+
+(ert-deftest agent-shell--on-notification-tool-call-carries-max-height-test ()
+  "Tool calls hand the body cap to the fragment writer.
+Both the initial `tool_call' and its streamed `tool_call_update'
+continuations carry `agent-shell-tool-use-max-height', so an expanded
+tool section stays bounded while its output streams."
+  (let ((state (agent-shell--make-state))
+        (agent-shell-tool-use-max-height 3)
+        (rendered nil))
+    (map-put! state :active-requests t)
+    (cl-letf (((symbol-function 'agent-shell--update-fragment)
+               (lambda (&rest args) (push args rendered)))
+              ((symbol-function 'agent-shell--refresh-activity-group-header) #'ignore)
+              ((symbol-function 'agent-shell--sync-activity-group-fold) #'ignore)
+              ((symbol-function 'agent-shell--append-transcript) #'ignore)
+              ((symbol-function 'agent-shell--make-transcript-tool-call-entry)
+               (lambda (&rest _) ""))
+              ((symbol-function 'agent-shell--delete-fragment) #'ignore)
+              ((symbol-function 'agent-shell--cancel-idle-timer) #'ignore)
+              ((symbol-function 'agent-shell--emit-event) #'ignore)
+              ((symbol-function 'agent-shell-make-tool-call-label)
+               (lambda (&rest _) '((:status . "s") (:title . "t")))))
+      (cl-flet ((notify (update)
+                  (agent-shell--on-notification
+                   :state state
+                   :acp-notification `((method . "session/update")
+                                       (params (update . ,update))))))
+        (notify '((sessionUpdate . "tool_call") (toolCallId . "A")
+                  (title . "A") (kind . "other") (status . "pending")))
+        (notify '((sessionUpdate . "tool_call_update") (toolCallId . "A")
+                  (status . "running")
+                  (content . [((type . "content")
+                               (content (type . "text") (text . "build started")))])))
+        ;; (rendered is newest-first: the update, then the initial call.)
+        (should (= 2 (length rendered)))
+        (should (equal 3 (plist-get (car rendered) :max-height)))
+        (should-not (plist-get (car rendered) :append))
+        (should (equal 3 (plist-get (cadr rendered) :max-height)))))))

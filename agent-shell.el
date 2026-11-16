@@ -194,6 +194,23 @@ When non-nil, tool use sections are expanded."
   :type 'boolean
   :group 'agent-shell)
 
+(defcustom agent-shell-tool-use-max-height 15
+  "Maximum number of lines an expanded tool use section shows.
+
+Tool output can run long, and a body left unbounded pushes the rest of
+the conversation off screen.  The body keeps its whole text (copying
+it, searching it, and the transcript are unaffected): lines past this
+many are hidden behind an ellipsis, and expanding the section again
+reveals them all.
+
+Very long single lines are shortened separately for redisplay (see
+`agent-shell--truncate-tool-output-lines').
+
+Set to nil to show tool bodies in full."
+  :type '(choice (const :tag "No limit" nil)
+                 (integer :tag "Lines"))
+  :group 'agent-shell)
+
 (defcustom agent-shell-activity-group-expand-by-default 'latest
   "When activity group sections should be expanded.
 
@@ -3582,6 +3599,7 @@ Clears STATE's `:expanded-activity-group'."
               :group-label agent-shell--activity-group-label
               :group-expanded (agent-shell--activity-group-initial-expanded-p)
               :expanded agent-shell-tool-use-expand-by-default
+              :max-height agent-shell-tool-use-max-height
               :above-last-prompt (not (agent-shell--active-requests-p state)))
              (agent-shell--refresh-activity-group-header state group-id)
              (agent-shell--sync-activity-group-fold :state state :group-id group-id)
@@ -3937,6 +3955,7 @@ Clears STATE's `:expanded-activity-group'."
                           (string-trim body-text))))
                 :append delta-append
                 :expanded agent-shell-tool-use-expand-by-default
+                :max-height agent-shell-tool-use-max-height
                 :above-last-prompt (not (agent-shell--active-requests-p state)))
                ;; Track how much accumulated output has been written so the
                ;; next update can append only its newly grown tail.  The
