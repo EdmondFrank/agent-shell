@@ -238,52 +238,6 @@ For example, a session at 0.4237 USD gives \"$0.42\"."
     (propertize (agent-shell--format-cost usage)
                 'face 'agent-shell-secondary
                 'help-echo (agent-shell--format-usage usage))))
-(defun agent-shell--format-usage-summary (usage)
-  "Return a compact usage summary for appending to a header.
-
-USAGE is the session usage alist stored in state's `:usage' (token
-counts, context used/size, cost).  Returns a propertized string
-with comma-separated sections for the data present -- Context,
-Tokens, Cost -- prefixed with \", \", or nil when USAGE carries no
-data.  Zero values contribute no sections: the token breakdown
-shows only non-zero in/out/thought/cached counts (total in
-parentheses when present), cost appears only for a non-zero
-amount, and an unknown context size renders as \"?\".  With no
-data at all, nil is returned."
-  (let* ((context-used (or (map-elt usage :context-used) 0))
-         (context-size (or (map-elt usage :context-size) 0))
-         (input-tokens (or (map-elt usage :input-tokens) 0))
-         (output-tokens (or (map-elt usage :output-tokens) 0))
-         (thought-tokens (or (map-elt usage :thought-tokens) 0))
-         (cached-tokens (or (map-elt usage :cached-read-tokens) 0))
-         (total (or (map-elt usage :total-tokens) 0))
-         (context (when (or (> context-used 0) (> context-size 0))
-                    (format "Context: %s/%s"
-                            (agent-shell--format-number-compact context-used)
-                            (if (> context-size 0)
-                                (agent-shell--format-number-compact context-size)
-                              "?"))))
-         (tokens
-          (when-let* ((parts (delq nil
-                                   (list
-                                    (when (> input-tokens 0)
-                                      (format "%s in" (agent-shell--format-number-compact input-tokens)))
-                                    (when (> output-tokens 0)
-                                      (format "%s out" (agent-shell--format-number-compact output-tokens)))
-                                    (when (> thought-tokens 0)
-                                      (format "%s thought" (agent-shell--format-number-compact thought-tokens)))
-                                    (when (> cached-tokens 0)
-                                      (format "%s cached" (agent-shell--format-number-compact cached-tokens)))))))
-            (concat "Tokens: " (string-join parts " · ")
-                    (when (> total 0)
-                      (format " (%s total)" (agent-shell--format-number-compact total))))))
-         (cost (when-let* ((amount (map-elt usage :cost-amount))
-                           ((> amount 0)))
-                 (format "Cost: %s%.2f" (or (map-elt usage :cost-currency) "$") amount)))
-         (sections (delq nil (list context tokens cost))))
-    (when sections
-      (propertize (concat ", " (string-join sections ", "))
-                  'font-lock-face 'agent-shell-secondary))))
 
 (defun agent-shell--context-usage-face (percentage)
   "Return the face for context usage at PERCENTAGE.

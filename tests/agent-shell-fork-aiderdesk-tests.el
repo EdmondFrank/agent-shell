@@ -1,4 +1,4 @@
-;;; agent-shell-aiderdesk-tests.el --- Tests for AiderDesk integration -*- lexical-binding: t; -*-
+;;; agent-shell-fork-aiderdesk-tests.el --- Tests for AiderDesk integration -*- lexical-binding: t; -*-
 
 ;;; Commentary:
 
@@ -11,8 +11,14 @@
 
 (require 'ert)
 (require 'cl-lib)
+;; Fork tests live beside upstream's, but their sources sit in fork/:
+;; add it so a plain `-L .' run (upstream CI) still loads them.
+(add-to-list 'load-path
+             (expand-file-name
+              "../fork" (file-name-directory (or load-file-name buffer-file-name
+                                                 default-directory))))
 (require 'agent-shell-project)
-(require 'agent-shell-aiderdesk)
+(require 'agent-shell-fork-aiderdesk)
 
 ;; Set buffer-locally by tests to stand in for comint's prompt marker.
 (defvar comint-accum-marker)
@@ -215,5 +221,5 @@
       (should-error (agent-shell-aiderdesk-previous-input)
                     :type 'user-error))))
 
-(provide 'agent-shell-aiderdesk-tests)
-;;; agent-shell-aiderdesk-tests.el ends here
+(provide 'agent-shell-fork-aiderdesk-tests)
+;;; agent-shell-fork-aiderdesk-tests.el ends here

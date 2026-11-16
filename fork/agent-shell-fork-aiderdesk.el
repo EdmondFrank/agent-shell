@@ -1,4 +1,4 @@
-;;; agent-shell-aiderdesk.el --- AiderDesk agent configurations -*- lexical-binding: t; -*-
+;;; agent-shell-fork-aiderdesk.el --- AiderDesk agent configurations -*- lexical-binding: t; -*-
 
 ;; Copyright (C) 2024 Alvaro Ramirez
 
@@ -31,8 +31,8 @@
 
 ;;; Code:
 
-(eval-when-compile
-  (require 'cl-lib))
+(require 'cl-lib)
+(require 'subr-x)
 (require 'shell-maker)
 (require 'acp)
 (require 'agent-shell-config)
@@ -353,6 +353,6 @@ config option and applies the selection through
   (agent-shell-aiderdesk--set-config-option-by-id
    "autonomy_mode" "Autonomy mode: "))
 
-(provide 'agent-shell-aiderdesk)
+(provide 'agent-shell-fork-aiderdesk)
 
-;;; agent-shell-aiderdesk.el ends here
+;;; agent-shell-fork-aiderdesk.el ends here

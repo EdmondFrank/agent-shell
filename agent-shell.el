@@ -62,7 +62,6 @@
 (require 'agent-shell-artist)
 (require 'agent-shell-faces)
 (require 'agent-shell-markdown)
-(require 'agent-shell-aiderdesk)
 (require 'agent-shell-antigravity)
 (require 'agent-shell-anthropic)
 (require 'agent-shell-auggie)
@@ -172,43 +171,12 @@ When non-nil, thought process sections are expanded."
   :type 'boolean
   :group 'agent-shell)
 
-(defcustom agent-shell-thought-process-max-height 15
-  "Maximum number of lines an expanded thought process section shows.
-
-Thoughts can run long, and a body left unbounded pushes the rest of the
-conversation off screen while it streams.  The body keeps its whole text
-(copying it, searching it, and the transcript are unaffected): lines
-past this many are hidden behind an ellipsis, and expanding the section
-again reveals them all.
-
-Set to nil to show thought bodies in full."
-  :type '(choice (const :tag "No limit" nil)
-                 (integer :tag "Lines"))
-  :group 'agent-shell)
-
 (defcustom agent-shell-tool-use-expand-by-default nil
   "Whether tool use sections should be expanded by default.
 
 When nil (the default), tool use sections are collapsed.
 When non-nil, tool use sections are expanded."
   :type 'boolean
-  :group 'agent-shell)
-
-(defcustom agent-shell-tool-use-max-height 15
-  "Maximum number of lines an expanded tool use section shows.
-
-Tool output can run long, and a body left unbounded pushes the rest of
-the conversation off screen.  The body keeps its whole text (copying
-it, searching it, and the transcript are unaffected): lines past this
-many are hidden behind an ellipsis, and expanding the section again
-reveals them all.
-
-Very long single lines are shortened separately for redisplay (see
-`agent-shell--truncate-tool-output-lines').
-
-Set to nil to show tool bodies in full."
-  :type '(choice (const :tag "No limit" nil)
-                 (integer :tag "Lines"))
   :group 'agent-shell)
 
 (defcustom agent-shell-activity-group-expand-by-default 'latest
@@ -874,8 +842,7 @@ reloads.
 This is the default value of `agent-shell-agent-configs'.  It is exposed
 so a function value for that variable can build on the defaults, for
 example filtering them.  See `agent-shell-agent-configs'."
-  (list #'agent-shell-aiderdesk-make-agent-config
-        #'agent-shell-antigravity-make-agent-config
+  (list #'agent-shell-antigravity-make-agent-config
         #'agent-shell-auggie-make-agent-config
         #'agent-shell-anthropic-make-claude-code-config
         #'agent-shell-codebuddy-make-agent-config
@@ -2749,9 +2716,6 @@ mouse selection or a kill where mark > point) is normalized."
         (if (get-text-property 0 'agent-shell-block-quote match) "" match))
       text nil t))))
 
-(declare-function agent-shell-aiderdesk-previous-input "agent-shell-aiderdesk")
-(declare-function agent-shell-aiderdesk-next-input "agent-shell-aiderdesk")
-
 (defvar-keymap agent-shell-mode-map
   :parent shell-maker-mode-map
   :doc "Keymap for `agent-shell-mode'."
@@ -2771,8 +2735,6 @@ mouse selection or a kill where mark > point) is normalized."
   "C-c C-t" #'agent-shell-set-session-thought-level
   "C-c C-o" #'agent-shell-other-buffer
   "C-c C-s" #'agent-shell-set-session-config-option
-  "M-<up>" #'agent-shell-aiderdesk-previous-input
-  "M-<down>" #'agent-shell-aiderdesk-next-input
   "<remap> <yank>" #'agent-shell-yank-dwim
   "<remap> <comint-send-input>" #'agent-shell-submit
   ;; No equivalent in comint, bind explicitly.
@@ -3430,19 +3392,8 @@ No-op while that function has nothing to summarize (an empty group)."
     (agent-shell--update-fragment
      :state state
      :block-id group-id
-     :label-left (concat label
-                         (when (agent-shell--group-has-thought-p state group-id)
-                           (or (agent-shell--format-usage-summary (map-elt state :usage)) "")))
+     :label-left label
      :above-last-prompt (not (agent-shell--active-requests-p state)))))
-
-(defun agent-shell--refresh-latest-thought-group-header (state)
-  "Refresh the latest activity group's header in STATE when it holds a thought.
-
-Keeps the usage suffix on the current group's header current: called
-on `usage_update' notifications and once a turn's usage lands."
-  (when-let* ((group-id (agent-shell--activity-group-latest-id state))
-              ((agent-shell--group-has-thought-p state group-id)))
-    (agent-shell--refresh-activity-group-header state group-id)))
 
 (cl-defun agent-shell--sync-activity-group-fold (&key state group-id namespace-id)
   "Leave GROUP-ID the only expanded activity group in STATE.
@@ -3599,7 +3550,6 @@ Clears STATE's `:expanded-activity-group'."
               :group-label agent-shell--activity-group-label
               :group-expanded (agent-shell--activity-group-initial-expanded-p)
               :expanded agent-shell-tool-use-expand-by-default
-              :max-height agent-shell-tool-use-max-height
               :above-last-prompt (not (agent-shell--active-requests-p state)))
              (agent-shell--refresh-activity-group-header state group-id)
              (agent-shell--sync-activity-group-fold :state state :group-id group-id)
@@ -3675,7 +3625,6 @@ Clears STATE's `:expanded-activity-group'."
                     :group-label agent-shell--activity-group-label
                     :group-expanded (agent-shell--activity-group-initial-expanded-p)
                     :render-body-images t
-                    :max-height agent-shell-thought-process-max-height
                     :above-last-prompt (not (agent-shell--active-requests-p state)))
                    ;; Count this thought and relabel the header so a
                    ;; thought-only group reads "Thinking"/"Thought" instead of
@@ -3696,7 +3645,6 @@ Clears STATE's `:expanded-activity-group'."
                 :block-id (format "%s-agent_thought_chunk"
                                   (map-elt state :chunked-group-count))
                 :body body
-                :max-height agent-shell-thought-process-max-height
                 :above-last-prompt (not (agent-shell--active-requests-p state)))))
            (map-put! state :last-entry-type "agent_thought_chunk"))
           ((equal (map-nested-elt acp-notification '(params update sessionUpdate)) "user_message_chunk")
@@ -3825,63 +3773,23 @@ Clears STATE's `:expanded-activity-group'."
             :data (list (cons :tool-call-id (map-nested-elt acp-notification '(params update toolCallId)))
                         (cons :tool-call (map-nested-elt state `(:tool-calls ,(map-nested-elt acp-notification '(params update toolCallId)))))
                         (cons :meta (map-nested-elt acp-notification '(params update _meta)))))
-           (let* ((tool-call-id (map-nested-elt acp-notification '(params update toolCallId)))
-                  (diffs (map-nested-elt state `(:tool-calls ,tool-call-id :diffs)))
-                  ;; The update's accumulated tool output text (all content
-                  ;; blocks so far), re-derived deterministically from the
-                  ;; update.  Agents stream tool output by re-sending the
-                  ;; growing accumulated content on every tool_call_update,
-                  ;; so the render path must not re-render the whole body
-                  ;; per chunk: `delta-append' below appends only the newly
-                  ;; grown tail instead.
-                  (full-output (agent-shell--tool-call-update-output-markdown
-                                (map-nested-elt acp-notification '(params update))))
-                  ;; The accumulated output as the fragment body actually
-                  ;; shows it: the raw text with the surrounding `\n\n'
-                  ;; padding trimmed.  Delta bookkeeping keys off THIS, not
-                  ;; the raw output — tracking the raw text instead lets
-                  ;; the body trim eat whitespace at a chunk seam, after
-                  ;; which the grown tail merges into its preceding line
-                  ;; (a "line1\n" chunk followed by "line2\n" would render
-                  ;; "line1line2\n" instead of "line1\nline2\n").
-                  (trimmed-output (string-trim full-output))
+           (let* ((diffs (map-nested-elt state `(:tool-calls ,(map-nested-elt acp-notification '(params update toolCallId)) :diffs)))
                   (output (concat
                            "\n\n"
-                           full-output
+                           (agent-shell--tool-call-update-output-markdown
+                            (map-nested-elt acp-notification '(params update)))
                            "\n\n"))
                   (diff-text (agent-shell--format-diffs-as-text diffs))
                   (body-text (agent-shell--truncate-tool-output-lines
                               (if diff-text
                                   (concat output "\n\n" diff-text)
                                 output)))
-                  ;; Output already written into the fragment body (tracked
-                  ;; below), nil until the first content-bearing update.
-                  (streamed-output (map-nested-elt state `(:tool-calls ,tool-call-id :streamed-output)))
-                  ;; Prefer appending the newly grown tail over replacing the
-                  ;; whole body: the existing per-chunk machinery then renders
-                  ;; only the delta (watermark-backed) instead of re-rendering
-                  ;; the accumulated body every chunk.  Diffs (rendered after
-                  ;; the output, so a growing output would need a mid-body
-                  ;; insert), content resets (the re-derived output is no
-                  ;; longer a strict extension), line truncation rewrites
-                  ;; (the cursor tracks untruncated text) and an in-progress
-                  ;; elicitation body all fall back to the full replace.
-                  (delta-append (and (null diff-text)
-                                     (equal body-text output)
-                                     (not (agent-shell-elicitation--pending-for-tool-call-p
-                                           :state state :tool-call-id tool-call-id))
-                                     streamed-output
-                                     (not (string-empty-p streamed-output))
-                                     (string-prefix-p streamed-output trimmed-output)
-                                     (> (length trimmed-output) (length streamed-output))))
-                  (output-delta (and delta-append
-                                     (substring trimmed-output (length streamed-output))))
                   ;; Whether this update introduces a new tool call rather than
                   ;; editing an earlier one in place.  Captured before the
                   ;; group-id helper assigns a group, so an in-place update
                   ;; does not look new.
                   (tool-newly-grouped
-                   (not (map-nested-elt state `(:tool-calls ,tool-call-id :group-id)))))
+                   (not (map-nested-elt state `(:tool-calls ,(map-nested-elt acp-notification '(params update toolCallId)) :group-id)))))
              ;; Log tool call to transcript when completed or failed
              (when (and (map-nested-elt acp-notification '(params update status))
                         (member (map-nested-elt acp-notification '(params update status)) '("completed" "failed")))
@@ -3905,9 +3813,10 @@ Clears STATE's `:expanded-activity-group'."
                ;; block-id must be the same as the one used as
                ;; agent-shell--update-fragment param by "session/request_permission".
                (agent-shell--delete-fragment :state state :block-id (format "permission-%s" (map-nested-elt acp-notification '(params update toolCallId)))))
-             (let* ((tool-call-labels (agent-shell-make-tool-call-label state tool-call-id))
+             (let* ((tool-call-labels (agent-shell-make-tool-call-label state (map-nested-elt acp-notification '(params update toolCallId))))
                     (group-id (agent-shell--activity-group-id
-                               state tool-call-id))
+                               state (map-nested-elt acp-notification '(params update toolCallId))))
+                    (tool-call-id (map-nested-elt acp-notification '(params update toolCallId)))
                     (saved-command (map-nested-elt state `(:tool-calls ,tool-call-id :command)))
                     ;; Prepend fenced command to body for Bash-like
                     ;; tools.
@@ -3933,50 +3842,26 @@ Clears STATE's `:expanded-activity-group'."
                                    (agent-shell--format-tool-call-input saved-input))))
                (agent-shell--update-fragment
                 :state state
-                :block-id tool-call-id
+                :block-id (map-nested-elt acp-notification '(params update toolCallId))
                 :label-left (map-elt tool-call-labels :status)
                 :label-right (map-elt tool-call-labels :title)
                 :group-id group-id
                 :group-label agent-shell--activity-group-label
                 :group-expanded (agent-shell--activity-group-initial-expanded-p)
-                :body (if delta-append
-                          output-delta
-                        (cond
-                         ;; A form is showing these questions interactively
-                         ;; just below, so repeating them here would ask twice.
-                         ((agent-shell-elicitation--pending-for-tool-call-p
-                           :state state :tool-call-id tool-call-id)
-                          "")
-                         (command-block
-                          (concat command-block "\n\n" (string-trim body-text)))
-                         (input-block
-                          (concat input-block "\n\n" (string-trim body-text)))
-                         (t
-                          (string-trim body-text))))
-                :append delta-append
+                :body (cond
+                       ;; A form is showing these questions interactively
+                       ;; just below, so repeating them here would ask twice.
+                       ((agent-shell-elicitation--pending-for-tool-call-p
+                         :state state :tool-call-id tool-call-id)
+                        "")
+                       (command-block
+                        (concat command-block "\n\n" (string-trim body-text)))
+                       (input-block
+                        (concat input-block "\n\n" (string-trim body-text)))
+                       (t
+                        (string-trim body-text)))
                 :expanded agent-shell-tool-use-expand-by-default
-                :max-height agent-shell-tool-use-max-height
                 :above-last-prompt (not (agent-shell--active-requests-p state)))
-               ;; Track how much accumulated output has been written so the
-               ;; next update can append only its newly grown tail.  The
-               ;; entry carries at most one `:streamed-output' cursor (the
-               ;; previous one is dropped), and none at all once the call
-               ;; showed diffs: a diff-bearing body ends with the diff
-               ;; suffix after the output, so a later grown tail could only
-               ;; land after the diffs — future updates fall back to the
-               ;; full replace (output then diffs, in that order) instead.
-               (let* ((tool-call (map-nested-elt state `(:tool-calls ,tool-call-id)))
-                      (without-cursor
-                       (seq-remove (lambda (pair)
-                                     (eq (car pair) :streamed-output))
-                                   tool-call)))
-                 (map-put! (map-elt state :tool-calls)
-                           tool-call-id
-                           (if diff-text
-                               without-cursor
-                             (append without-cursor
-                                     (list (cons :streamed-output
-                                                 trimmed-output))))))
                (agent-shell--refresh-activity-group-header state group-id)
                (agent-shell--sync-activity-group-fold :state state :group-id group-id))
              ;; Only advance the run boundary when this update introduced a new
@@ -4031,9 +3916,6 @@ Clears STATE's `:expanded-activity-group'."
             :event 'usage-update
             :data (list (cons :usage (map-elt state :usage))
                         (cons :meta (map-nested-elt acp-notification '(params update _meta)))))
-           ;; Refresh the current thought group's header so its usage
-           ;; suffix tracks the live context/cost data.
-           (agent-shell--refresh-latest-thought-group-header state)
            ;; Note: This is session-level state, no need to set :last-entry-type
            nil)
           ((equal (map-nested-elt acp-notification '(params update sessionUpdate)) "session_push_end")
@@ -5792,8 +5674,7 @@ CHUNK is an alist like:
    :create-new (map-elt chunk :create-new)
    :navigation 'never
    :render-body-images t
-   :above-last-prompt (map-elt chunk :above-last-prompt)
-   :max-height (map-elt chunk :max-height)))
+   :above-last-prompt (map-elt chunk :above-last-prompt)))
 
 (defun agent-shell--flush-stream-render (state)
   "Render STATE's pending streamed text, if any."
@@ -5804,8 +5685,7 @@ CHUNK is an alist like:
     (agent-shell--render-streamed-chunk state pending)))
 
 (cl-defun agent-shell--update-streamed-fragment (&key state namespace-id block-id body
-                                                      create-new above-last-prompt
-                                                      max-height)
+                                                      create-new above-last-prompt)
   "Append BODY to streamed fragment BLOCK-ID in STATE.
 
 NAMESPACE-ID, CREATE-NEW, and ABOVE-LAST-PROMPT follow
@@ -5816,8 +5696,7 @@ different fragment or CREATE-NEW flushes the previous batch first."
                      (cons :block-id block-id)
                      (cons :body body)
                      (cons :create-new create-new)
-                     (cons :above-last-prompt above-last-prompt)
-                     (cons :max-height max-height)))
+                     (cons :above-last-prompt above-last-prompt)))
         (pending (map-elt state :stream-render-pending)))
     (cond
      ((not agent-shell--stream-render-interval)
@@ -5835,8 +5714,7 @@ different fragment or CREATE-NEW flushes the previous batch first."
 (cl-defun agent-shell--update-fragment (&key state namespace-id block-id label-left label-right
                                              body append create-new navigation expanded
                                              render-body-images above-last-prompt
-                                             group-id group-label (group-expanded t)
-                                             max-height)
+                                             group-id group-label (group-expanded t))
   "Update fragment in the shell buffer.
 
 Creates or updates existing dialog using STATE's request count as namespace
@@ -5857,11 +5735,7 @@ Programmatic fragment updates do not enter undo history.
 
 GROUP-ID nests this block under a collapsible group header, materialized
 from GROUP-LABEL on first use (see `agent-shell-ui-make-fragment-model'),
-with GROUP-EXPANDED as the group's initial fold state.
-
-MAX-HEIGHT caps how many body lines an expanded block shows, hiding the
-rest behind an ellipsis until it is expanded again (see
-`agent-shell-ui-make-fragment-model')."
+with GROUP-EXPANDED as the group's initial fold state."
   ;; Streamed text lands before this fragment, never after it.
   (agent-shell--flush-stream-render state)
   ;; A persistent prompt is live for the whole turn, so there is always one
@@ -5910,8 +5784,7 @@ rest behind an ellipsis until it is expanded again (see
                              :body body
                              :group-id group-id
                              :group-label group-label
-                             :group-expanded group-expanded
-                             :max-height max-height)
+                             :group-expanded group-expanded)
                             :navigation navigation
                             :append append
                             :create-new create-new
@@ -5932,10 +5805,7 @@ rest behind an ellipsis until it is expanded again (see
                 ;; rendered on expand via
                 ;; `agent-shell-ui-post-expand-fragment-at-point-hook'.
                 (unless (agent-shell-ui--body-invisible-p (point-min) (point-max))
-                  (agent-shell--render-markdown :render-images render-body-images))
-                ;; Rendering rewrites body chars, dropping the cap's
-                ;; `invisible' from any char it rewrote.
-                (agent-shell-ui--ensure-body-cap body-start body-end)))
+                  (agent-shell--render-markdown :render-images render-body-images))))
             ;; Note: For now, we're skipping applying markdown
             ;; on left labels as they currently carry propertized text
             ;; for statuses (ie. boxed).
@@ -5984,8 +5854,7 @@ rest behind an ellipsis until it is expanded again (see
                               :body body
                               :group-id group-id
                               :group-label group-label
-                              :group-expanded group-expanded
-                              :max-height max-height)
+                              :group-expanded group-expanded)
                              :navigation navigation
                              :append append
                              :create-new create-new
@@ -6022,9 +5891,6 @@ rest behind an ellipsis until it is expanded again (see
                ;; `agent-shell-ui-post-expand-fragment-at-point-hook'.
                (unless (agent-shell-ui--body-invisible-p (point-min) (point-max))
                  (agent-shell--render-markdown))
-               ;; Rendering rewrites body chars, dropping the cap's
-               ;; `invisible' from any char it rewrote.
-               (agent-shell-ui--ensure-body-cap body-start body-end)
                (widen))
              ;;
              ;; Note: For now, we're skipping applying markdown
@@ -9753,9 +9619,6 @@ reads the buffer's prompt capabilities."
                    ;; Extract usage information from response
                    (when (map-elt acp-response 'usage)
                      (agent-shell--save-usage :state (agent-shell--state) :acp-usage (map-elt acp-response 'usage)))
-                   ;; The token breakdown landed: refresh the current
-                   ;; thought group's header so its usage suffix is complete.
-                   (agent-shell--refresh-latest-thought-group-header (agent-shell--state))
                    (let ((success (equal (map-elt acp-response 'stopReason)
                                          "end_turn")))
                      ;; Display usage box at end of turn if enabled and data available
