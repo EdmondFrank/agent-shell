@@ -14,6 +14,9 @@
         (agent-shell-ui-update-fragment function #'agent-shell-fork-stream--filter-args
          "3afe1d20fce5d955c76847eb01cd2604774aac5926d79354de3b630c498451d8"
          "stream: turns a grown body into an append")
+        (agent-shell--truncate-tool-output-lines function #'agent-shell-fork-width--around
+         "a62a5343c01d701c9bd622053d2f4c427fc1d88de7398b55beff199df5230c19"
+         "width: shortens tool output lines before they render")
         (agent-shell-ui-toggle-fragment function #'agent-shell-fork-cap--toggle-around
          "85bf73b024dc2fd77e56d77fe7f10b2fc9b26be05e33c371f722f32bd9dd6bd5"
          "cap: first toggle on a capped body reveals it")

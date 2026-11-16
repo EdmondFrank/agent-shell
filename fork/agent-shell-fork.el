@@ -34,6 +34,7 @@
 ;;   fork/agent-shell-fork-aiderdesk.el  AiderDesk agent definition
 ;;   fork/agent-shell-fork-cap.el        body height caps (advice)
 ;;   fork/agent-shell-fork-stream.el     streamed tool output deltas (advice)
+;;   fork/agent-shell-fork-width.el      tool output line width cap (advice)
 ;;   fork/agent-shell-fork-markdown.el   tree-sitter fenced-block rendering
 ;;   fork/agent-shell-fork-usage.el      usage summary in group headers
 ;;   fork/overrides.eld                  advice/override manifest (drift)
@@ -72,6 +73,7 @@
 ;; upstream seam degrades to stock behaviour instead of blocking startup.
 (dolist (feature '(agent-shell-fork-cap
                    agent-shell-fork-stream
+                   agent-shell-fork-width
                    agent-shell-fork-markdown
                    agent-shell-fork-usage))
   (require feature nil t))

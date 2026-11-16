@@ -14,41 +14,9 @@
 (require 'agent-shell)
 (require 'agent-shell-fork)
 
-(defconst fork-overrides
-  ;; (SYMBOL KIND WRAPPER NOTE)
-  '((agent-shell-ui-update-fragment
-     function agent-shell-fork-cap--after-update
-     "cap: re-derives the cut after every insert and streamed update")
-    (agent-shell-ui-update-fragment
-     function agent-shell-fork-stream--filter-args
-     "stream: turns a grown body into an append")
-    (agent-shell-ui-toggle-fragment
-     function agent-shell-fork-cap--toggle-around
-     "cap: first toggle on a capped body reveals it")
-    (agent-shell-ui--toggle-leaf-fragment-at-point
-     function agent-shell-fork-cap--after-toggle
-     "cap: expanding a folded body keeps it uncapped")
-    (agent-shell--save-usage
-     function agent-shell-fork-usage--after-save-usage
-     "usage: refresh the thought group header when a turn's usage lands")
-    (agent-shell--update-usage-from-notification
-     function agent-shell-fork-usage--after-notification
-     "usage: refresh the thought group header on a usage_update")
-    (agent-shell-activity-group-header-label-function
-     variable nil
-     "usage: wrapped to append the usage summary")
-    (agent-shell-ui--cached-block
-     function nil
-     "util: locates a fragment's block by qualified id")
-    (agent-shell-ui--body-range
-     function nil
-     "util: finds the body section inside a block")
-    (agent-shell-ui--apply-trailing-whitespace-invisible
-     function nil
-     "util: re-hides the body's trailing newlines")
-    (agent-shell-ui--set-group-collapsed
-     function nil
-     "cap: group folding re-applies each child's state")))
+;; The seam list lives in fork-seams.el, shared with check-drift.el, so
+;; a new wrapper is recorded in one place only.
+(require 'fork-seams)
 
 (defun fork-overrides--source (symbol kind)
   "Return SYMBOL's current upstream definition as a string.
@@ -76,7 +44,7 @@ upstream ships, not the fork's own wrapper around it."
   (insert ";; tell a harmless upstream commit from one that moved a seam.\n")
   (insert ";;\n;; (SYMBOL KIND WRAPPER HASH NOTE)\n\n")
   (insert "(setq fork-overrides-manifest\n      '(")
-  (dolist (entry fork-overrides)
+  (dolist (entry fork-seam-specs)
     (insert (format "\n        (%s %s %s\n         %S\n         %S)"
                     (car entry) (nth 1 entry)
                     (if (nth 2 entry) (format "#'%s" (nth 2 entry)) "nil")

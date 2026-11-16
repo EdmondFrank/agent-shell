@@ -56,6 +56,7 @@ without creating tomorrow's conflict.
     agent-shell-fork-aiderdesk-tests.el
     agent-shell-fork-cap-tests.el
     agent-shell-fork-stream-tests.el
+    agent-shell-fork-width-tests.el
     agent-shell-fork-usage-tests.el
   #+end_src
 
@@ -148,14 +149,47 @@ without creating tomorrow's conflict.
 
    Agents stream tool output by re-sending the whole accumulated text on
    every update.  Upstream re-renders the body for each chunk; the fork
-   notices that the new body is a strict extension of what is already
-   displayed and appends only the grown tail through upstream's own
-   ~:append~ path.  Cost per chunk becomes O(new text) instead of
-   O(body).
+   notices that the new body is a strict extension of the one sent last
+   time and appends only the grown tail through upstream's own ~:append~
+   path.  Cost per chunk becomes O(new text) instead of O(body).
+
+   The comparison is against the *source* body, kept as a length and
+   digest per fragment, not against the buffer: rendering rewrites what
+   it put on screen (a fenced block loses its fences, a heading loses its
+   ~#~, a table gets padded), so a buffer comparison refuses to append for
+   exactly the bodies that cost most to re-render.  Measured on a real
+   session (7 bodies, 40 cumulative chunks): 7.0s with upstream's replace
+   path, 1.9s appending on the source text.
 
    No option: it falls back to a full replace whenever appending would
    not be equivalent -- a body that is not an extension, a diff rendered
-   after the output, a truncated long line, an open elicitation form.
+   after the output, a re-sent identical body, a grown tail carrying a
+   code fence the rendered body can no longer pair with, an update that
+   creates a new block or already asks to append.
+
+** Tool output line width
+
+   Upstream shortens a tool-output line only past 32 768 characters
+   ([[https://github.com/xenodium/agent-shell/issues/839][#839]]), which leaves the band that shows up in practice untouched: a
+   real session held 22 lines over 2 000 characters, the longest 18 866,
+   and none over upstream's limit.  A line that long costs twice over --
+   parsing is linear in its length (a 1 MB line: 738ms to render, 5.6s to
+   fontify as a fenced block), and redisplay wraps it to hundreds of
+   screen lines, so the height cap cannot hide it either.
+
+   The fork caps the width, so both costs are bounded before the body
+   renders.  Like upstream's own cap, the shortened text is what the
+   transcript records.
+
+   | Option                                | Default | Does                                    |
+   |---------------------------------------+---------+-----------------------------------------|
+   | ~agent-shell-fork-tool-max-line-width~  | ~4000~  | Characters kept per line (~nil~: upstream) |
+   | ~agent-shell-fork-tool-line-context~    | ~200~   | Characters kept at each end of a cut line |
+
+   Output with no over-wide line is returned untouched, without a split,
+   so the common case costs nothing.  Replaying the same session: 3.9s
+   without the cap, 2.5s with it; the 18 866-character line alone went
+   from 2.3s to 0.15s.
 
 ** Usage summary on thought group headers
 
@@ -287,6 +321,7 @@ without creating tomorrow's conflict.
   | Body caps                         | advice on ~agent-shell-ui-update-fragment~ | advice          | supported     |
   |                                   | advice on ~agent-shell-ui-toggle-fragment~ | advice          | supported     |
   | Streamed deltas                   | ~:filter-args~ on the same update call      | advice          | supported     |
+  | Tool-output line width            | advice on ~agent-shell--truncate-tool-output-lines~ | advice  | supported     |
   | Usage summary                     | label-function wrap + usage advice          | data + advice   | supported     |
   | Tree-sitter fenced blocks         | none yet                                    | *upstream edit* | *not ported*  |
 
@@ -299,10 +334,14 @@ without creating tomorrow's conflict.
   fork/bin/run-tests        # whole ERT suite with the overlay loaded
   #+end_src
 
-  Baseline on this machine (macOS, Emacs 29.4): 1075 tests, 18 failures
-  that are environmental (graphical header, session-list fakes,
-  ellicitation capability, type-ahead restore) and pre-date the fork.
-  Compare against that number, not zero.
+  Baseline on this machine (macOS, Emacs 29.4): 1087 tests, 19 unexpected.
+  Eighteen are environmental (graphical header, session-list fakes,
+  elicitation capability, type-ahead restore) and pre-date the fork.  The
+  nineteenth is by design: ~agent-shell--truncate-tool-output-lines-test~
+  asserts upstream's 32 768-character cut, which
+  ~agent-shell-fork-tool-max-line-width~ tightens; the
+  ~agent-shell-fork-width-*~ tests cover the fork's cut.  Compare against
+  that number, not zero.
 
   Byte-compiling the fork modules is a cheap extra check:
 

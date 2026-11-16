@@ -19,6 +19,9 @@
     (agent-shell-ui-update-fragment
      function agent-shell-fork-stream--filter-args
      "stream: turns a grown body into an append")
+    (agent-shell--truncate-tool-output-lines
+     function agent-shell-fork-width--around
+     "width: shortens tool output lines before they render")
     (agent-shell-ui-toggle-fragment
      function agent-shell-fork-cap--toggle-around
      "cap: first toggle on a capped body reveals it")
