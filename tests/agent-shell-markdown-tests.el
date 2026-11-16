@@ -5909,6 +5909,101 @@ Searches with `case-fold-search' nil, as
                  '((:tracking-label . "new"))))
   (should-not (agent-shell-markdown--parse-link-attributes "width=50%")))
 
+(ert-deftest agent-shell-markdown-open-fence-start ()
+  ;; The last block of a still-streaming document is the open one; its
+  ;; opening fence line is what the styling passes stop at.
+  (with-temp-buffer
+    (insert "Intro\n\n```python\nx = 1\n")
+    (let* ((blocks (agent-shell-markdown--source-blocks))
+           (start (agent-shell-markdown--open-fence-start blocks)))
+      (should start)
+      (should (equal (buffer-substring-no-properties
+                      start
+                      (save-excursion (goto-char start) (line-end-position)))
+                     "```python"))))
+  ;; Nothing open: no cap.
+  (with-temp-buffer
+    (insert "```python\nx = 1\n```\n")
+    (should-not (agent-shell-markdown--open-fence-start
+                 (agent-shell-markdown--source-blocks))))
+  (with-temp-buffer
+    (insert "just prose\n")
+    (should-not (agent-shell-markdown--open-fence-start
+                 (agent-shell-markdown--source-blocks)))))
+
+(ert-deftest agent-shell-markdown-inline-code-skips-fenced-block ()
+  ;; A fenced block is an avoid-range, so backticks in its body are not
+  ;; inline `code' (and the scan jumps the block rather than walking it).
+  (with-temp-buffer
+    (insert "```sh\n`not inline`\nstill `body`\n```\n\nafter `real` here\n")
+    (let* ((blocks (agent-shell-markdown--source-blocks))
+           (ranges (agent-shell-markdown--inline-code-ranges
+                    :avoid-ranges (agent-shell-markdown--source-block-ranges
+                                   blocks))))
+      (should (= 1 (length ranges)))
+      (should (equal (buffer-substring-no-properties
+                      (car (car ranges)) (cdr (car ranges)))
+                     "real")))))
+
+(ert-deftest agent-shell-markdown-streamed-open-fence-settles-once-complete ()
+  ;; The styling passes stop at a still-open fence, so the body is only
+  ;; rendered once the closing fence arrives.  Streaming a block in then
+  ;; finishing the turn must produce a body tagged as rendered code, and
+  ;; a further complete render must leave the buffer untouched (neither
+  ;; dropping the body nor re-processing it as inline markup).
+  (let ((buffer (generate-new-buffer " *agent-shell-markdown-stream*")))
+    (unwind-protect
+        (with-current-buffer buffer
+          (setq buffer-undo-list t)
+          (let* ((markdown (concat "Intro **bold**\n\n```python\n"
+                                  "x = 1\ny = 2\n```\n\nOutro *ital*\n"))
+                 (i 0))
+            (while (< i (length markdown))
+              (goto-char (point-max))
+              (insert (substring markdown i (min (length markdown) (+ i 3))))
+              (setq i (+ i 3))
+              (agent-shell-markdown-replace-markup)))
+          (agent-shell-markdown-replace-markup :complete t)
+          (let ((settled (buffer-string)))
+            (agent-shell-markdown-replace-markup :complete t)
+            (should (equal settled (buffer-string)))
+            ;; The fenced body is rendered code, not inline markup.
+            (should (string-match-p "x = 1" settled))
+            (should (text-property-not-all (point-min) (point-max)
+                                           'agent-shell-markdown-frozen nil))
+            ;; `**bold**' outside the block still rendered.
+            (should (string-match-p "Intro bold" settled))))
+      (kill-buffer buffer))))
+
+(ert-deftest agent-shell-markdown-treesit-mode-for-respects-toggle ()
+  ;; With the option off, tree-sitter is never picked, grammar or not.
+  (let ((agent-shell-markdown-treesit-highlight nil))
+    (should-not (agent-shell-markdown--treesit-mode-for "python")))
+  ;; An unknown language has no tree-sitter mode either way.
+  (with-no-warnings
+    (should-not (agent-shell-markdown--treesit-mode-for
+                 "definitely-not-a-language"))))
+
+(ert-deftest agent-shell-markdown-normalize-lang ()
+  (should (equal (agent-shell-markdown--normalize-lang "Python") "python"))
+  (should (equal (agent-shell-markdown--normalize-lang " Elisp ") "emacs-lisp"))
+  (should (equal (agent-shell-markdown--normalize-lang "cpp") "c++"))
+  (should-not (agent-shell-markdown--normalize-lang "  "))
+  (should-not (agent-shell-markdown--normalize-lang nil)))
+
+(ert-deftest agent-shell-markdown-highlight-code-applies-faces ()
+  ;; Highlighting still yields faced text through the classic major mode
+  ;; when tree-sitter is disabled, and leaves unknown languages alone.
+  (let ((agent-shell-markdown-treesit-highlight nil))
+    (let ((highlighted (agent-shell-markdown--highlight-code
+                        "def f(x):\n    return x\n" "python")))
+      (should (equal (substring-no-properties highlighted)
+                     "def f(x):\n    return x\n"))
+      (should (text-property-not-all 0 (length highlighted)
+                                     'face nil highlighted))))
+  (should (equal (agent-shell-markdown--highlight-code "raw" "no-such-lang")
+                 "raw")))
+
 (provide 'agent-shell-markdown-tests)
 
 ;;; agent-shell-markdown-tests.el ends here

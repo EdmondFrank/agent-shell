@@ -238,6 +238,60 @@ highlight, regardless of size."
                  (integer :tag "Max block length in chars"))
   :group 'agent-shell-markdown)
 
+(defcustom agent-shell-markdown-treesit-highlight t
+  "Whether to syntax-highlight fenced blocks with tree-sitter.
+
+When non-nil and a tree-sitter grammar for the block's language is
+installed (see `treesit-language-source-alist'), the body is
+fontified by the language's `-ts-mode' instead of its classic major
+mode.  Tree-sitter parsing is native and incremental, so a block
+that costs seconds to font-lock with, say, `python-mode'
+\\(2,000 lines: ~2.7s) takes a fraction of that (~250ms).
+
+Availability is checked per language at render time, so a language
+with no grammar, or with no `-ts-mode' (e.g. `emacs-lisp'), keeps
+using its classic major mode.  Set to nil to force classic
+font-lock everywhere."
+  :type 'boolean
+  :group 'agent-shell-markdown)
+
+(defconst agent-shell-markdown-treesit-modes
+  '(("bash" . bash-ts-mode)
+    ("c" . c-ts-mode)
+    ("c++" . cpp-ts-mode)
+    ("css" . css-ts-mode)
+    ("dockerfile" . dockerfile-ts-mode)
+    ("go" . go-ts-mode)
+    ("html" . html-ts-mode)
+    ("java" . java-ts-mode)
+    ("javascript" . js-ts-mode)
+    ("js" . js-ts-mode)
+    ("json" . json-ts-mode)
+    ("lua" . lua-ts-mode)
+    ("python" . python-ts-mode)
+    ("ruby" . ruby-ts-mode)
+    ("rust" . rust-ts-mode)
+    ("sh" . bash-ts-mode)
+    ("toml" . toml-ts-mode)
+    ("tsx" . tsx-ts-mode)
+    ("typescript" . typescript-ts-mode)
+    ("yaml" . yaml-ts-mode))
+  "Tree-sitter major mode to highlight each fenced-block language.
+Keys are normalized language tokens (after
+`agent-shell-markdown-language-mapping'); values are major modes.
+A language absent here falls back to its classic major mode, as does
+one whose grammar is not installed.  See
+`agent-shell-markdown-treesit-highlight'.")
+
+(defconst agent-shell-markdown-treesit-languages
+  '((js-ts-mode . javascript)
+    (typescript-ts-mode . typescript)
+    (tsx-ts-mode . tsx))
+  "Grammar language for tree-sitter modes whose name differs from it.
+Used to check grammar availability before enabling the mode.  Any
+mode not listed derives the language from its own name, e.g.
+`python-ts-mode' -> `python'.")
+
 (defvar agent-shell-markdown-image-max-width 0.4
   "Maximum width for inline images rendered from `![alt](url)'.
 An integer is taken as pixels.  A float between 0 and 1 is a
@@ -447,6 +501,7 @@ block is left as literal text."
           (source-ranges)
           (rendered-ranges)
           (inline-ranges)
+          (open-fence-start)
           (avoid-ranges))
       (save-restriction
         (narrow-to-region watermark (point-max))
@@ -459,11 +514,27 @@ block is left as literal text."
         (with-silent-modifications
           (agent-shell-markdown--restore-face-from-font-lock-face
            (point-min) (point-max)))
-        ;; Build the render context (fenced-block descriptors + inline
-        ;; `code' ranges) once, via the same function any external code
-        ;; renders a static region through, so the two cannot drift.
-        (setq context (agent-shell-markdown-context))
-        (setq source-blocks (map-elt context :source-blocks))
+        ;; Scan the fences over the whole region first, then stop the
+        ;; styling passes at a still-open block.  Everything from its
+        ;; opening fence on is code no pass renders until the closing
+        ;; fence arrives, so rescanning that growing body on every
+        ;; streamed chunk costs O(body) per chunk for no visible change
+        ;; (the dominant cost of streaming a large block — issue #757).
+        ;; The fences themselves are still scanned across the full
+        ;; region, so the closing fence is found on a later chunk, and
+        ;; external renderers still see the open block (they decide
+        ;; whether to claim it); the cap is applied only once they have
+        ;; run — see below.
+        (setq source-blocks (agent-shell-markdown--source-blocks))
+        ;; A marker, so the cap tracks any edit a renderer makes above it.
+        (when-let* ((start (agent-shell-markdown--open-fence-start
+                            source-blocks)))
+          (setq open-fence-start (copy-marker start)))
+        ;; Build the render context (inline `code' ranges) once, via the
+        ;; same function any external code renders a static region
+        ;; through, so the two cannot drift.  SOURCE-BLOCKS is handed in
+        ;; so the fence scan isn't repeated.
+        (setq context (agent-shell-markdown-context source-blocks))
         ;; Inline `code' spans, computed before the renderers run so an
         ;; external renderer can skip verbatim spans the same way it skips
         ;; fenced blocks.  The markers survive any buffer edits a renderer
@@ -489,6 +560,14 @@ block is left as literal text."
         (when external-watermarks
           (narrow-to-region (point-min)
                             (max (point-min) (seq-min external-watermarks))))
+        ;; Stop the styling passes at a still-open fenced block: nothing
+        ;; between its opening fence and `point-max' renders until the
+        ;; closing fence arrives, so walking it on every chunk is wasted
+        ;; work (see the fence scan above).
+        (when-let* ((fence (and open-fence-start
+                                (marker-position open-fence-start)))
+                    ((<= (point-min) fence)))
+          (narrow-to-region (point-min) (min (point-max) fence)))
         (setq rendered-ranges (agent-shell-markdown--make-markers
                                (agent-shell-markdown--frozen-ranges)))
         (setq avoid-ranges (agent-shell-markdown-sort-ranges
@@ -577,16 +656,43 @@ block is left as literal text."
       ;; the watermark rather than `point-min', which cost the whole
       ;; accumulated body per chunk (issue #757).
       (let ((normalization-start
-             (agent-shell-markdown--whitespace-normalization-start watermark)))
-        (agent-shell-markdown--collapse-list-blank-lines normalization-start)
-        ;; Frame rendered blocks with a blank line where they butt against
-        ;; prose.  Runs outside the watermark narrow, since a block's lower
-        ;; boundary sits behind the watermark by the time its successor
-        ;; streams in.
-        (agent-shell-markdown--pad-rendered-blocks normalization-start))
+             (agent-shell-markdown--whitespace-normalization-start watermark))
+            (fence (and open-fence-start
+                        (marker-position open-fence-start))))
+        ;; A still-open fenced block runs to `point-max' and holds no
+        ;; rendered block to frame; stop at its opening fence so framing
+        ;; does not walk its growing body on every chunk (see the fence
+        ;; scan above).  When the fence starts at or before the first
+        ;; boundary there is nothing above it to normalize at all.
+        (unless (and fence (<= fence normalization-start))
+          (save-restriction
+            (when fence
+              (narrow-to-region (point-min) fence))
+            (agent-shell-markdown--collapse-list-blank-lines normalization-start)
+            ;; Frame rendered blocks with a blank line where they butt against
+            ;; prose.  Runs outside the watermark narrow, since a block's lower
+            ;; boundary sits behind the watermark by the time its successor
+            ;; streams in.
+            (agent-shell-markdown--pad-rendered-blocks normalization-start))))
       (agent-shell-markdown--update-watermark
        :source-blocks source-blocks
        :external-candidates external-watermarks))))
+
+(defun agent-shell-markdown--open-fence-start (source-blocks)
+  "Return the start of the still-open fenced block in SOURCE-BLOCKS, or nil.
+
+SOURCE-BLOCKS are descriptors from `agent-shell-markdown--source-blocks'.
+Only the last block can be incomplete, and an incomplete block runs to
+`point-max'; its opening fence line starts at the returned position.
+
+Used to stop the styling passes at that fence: everything below it is
+code nothing renders until the closing fence arrives, so scanning it on
+every streamed chunk costs O(body) per chunk for no visible change (the
+dominant cost of streaming a large block — issue #757)."
+  (when-let* ((last-block (car (last source-blocks)))
+              ((not (map-elt last-block :complete)))
+              (start (map-nested-elt last-block '(:block :start))))
+    (marker-position start)))
 
 (defun agent-shell-markdown--source-block-ranges (source-blocks)
   "Project SOURCE-BLOCKS to sorted (START . END) marker ranges.
@@ -603,7 +709,7 @@ sorted — the form the avoid-range machinery
                    (map-nested-elt source-block '(:block :end))))
            source-blocks)))
 
-(defun agent-shell-markdown-context ()
+(defun agent-shell-markdown-context (&optional source-blocks)
   "Return the render context for the current narrowed region.
 
 Builds the same CONTEXT alist that
@@ -615,18 +721,23 @@ the buffer is narrowed to right now:
    (:inline-code-ranges . INLINE-CODE-RANGES))
 
 SOURCE-BLOCKS are the fenced-block descriptors from
-`agent-shell-markdown--source-blocks'.  INLINE-CODE-RANGES are
-marker ranges covering inline `code' span bodies, computed with the
-fenced blocks as avoid-ranges so backticks inside a fenced block are
-not mistaken for an inline span.  See
-`agent-shell-markdown-render-functions' for the meaning of each key.
+`agent-shell-markdown--source-blocks', scanned here when nil.  A
+caller that already scanned them (e.g. to find a still-open block)
+passes its result in to avoid the extra scan; the descriptors'
+markers track edits, so they stay valid either way.
+INLINE-CODE-RANGES are marker ranges covering inline `code' span
+bodies, computed with the fenced blocks as avoid-ranges so
+backticks inside a fenced block are not mistaken for an inline
+span.  See `agent-shell-markdown-render-functions' for the meaning
+of each key.
 
 `agent-shell-markdown-replace-markup' builds its context through
 this function too, so code that renders a static (non-streamed)
 region — which never passes through the streaming render hook — can
 obtain the identical context and stay in sync with the streaming
 path."
-  (let* ((source-blocks (agent-shell-markdown--source-blocks))
+  (let* ((source-blocks (or source-blocks
+                            (agent-shell-markdown--source-blocks)))
          (source-ranges (agent-shell-markdown--source-block-ranges source-blocks))
          (inline-ranges (agent-shell-markdown--make-markers
                          (agent-shell-markdown--inline-code-ranges
@@ -5207,11 +5318,13 @@ For example, \"old value\" carrying only `font-lock-face'
   "Return CODE syntax-highlighted using LANG's major mode.
 
 LANG is a language identifier as written after the opening
-fence (e.g. \"python\", \"elisp\").  When the resolved mode is
-loadable, CODE is fontified in a temporary buffer and returned
-with face properties applied.  Otherwise CODE is returned
+fence (e.g. \"python\", \"elisp\").  Code is fontified in a temporary
+buffer, preferring LANG's tree-sitter mode when its grammar is
+installed (see `agent-shell-markdown-treesit-highlight'), and
+returned with face properties applied.  Otherwise CODE is returned
 unchanged."
-  (if-let* ((mode (agent-shell-markdown--resolve-lang-mode lang))
+  (if-let* ((mode (or (agent-shell-markdown--treesit-mode-for lang)
+                      (agent-shell-markdown--resolve-lang-mode lang)))
             ((fboundp mode)))
       (with-temp-buffer
         ;; Fontify with a trailing newline: the fenced body stops before
@@ -5226,16 +5339,43 @@ unchanged."
         (buffer-substring (point-min) (+ (point-min) (length code))))
     code))
 
+(defun agent-shell-markdown--normalize-lang (lang)
+  "Return LANG lower-cased, trimmed and alias-resolved, or nil when blank.
+
+LANG is a fence language token, e.g. as written after the opening
+backticks.  `agent-shell-markdown-language-mapping' resolves aliases,
+so \"Elisp\" returns \"emacs-lisp\"."
+  (when (and lang (not (string-empty-p (string-trim lang))))
+    (let ((normalized (downcase (string-trim lang))))
+      (or (map-elt agent-shell-markdown-language-mapping normalized)
+          normalized))))
+
+(defun agent-shell-markdown--treesit-mode-for (lang)
+  "Return a tree-sitter major mode able to highlight LANG, or nil.
+
+Returns nil when `agent-shell-markdown-treesit-highlight' is off,
+tree-sitter is unavailable, LANG has no entry in
+`agent-shell-markdown-treesit-modes', or the grammar it needs is not
+installed.  The caller then falls back to the classic major mode."
+  (when (and agent-shell-markdown-treesit-highlight
+             (fboundp 'treesit-available-p)
+             (treesit-available-p))
+    (when-let* ((normalized (agent-shell-markdown--normalize-lang lang))
+                (mode (map-elt agent-shell-markdown-treesit-modes normalized))
+                ((fboundp mode))
+                (language (or (map-elt agent-shell-markdown-treesit-languages
+                                       mode)
+                              (intern (replace-regexp-in-string
+                                       "-ts-mode\\'" "" (symbol-name mode)))))
+                ((treesit-language-available-p language)))
+      mode)))
+
 (defun agent-shell-markdown--resolve-lang-mode (lang)
   "Resolve LANG string to a major mode symbol, or nil.
 LANG is case-folded and trimmed; `agent-shell-markdown-language-mapping'
 is consulted for aliases before the `-mode' suffix is appended."
-  (when (and lang (not (string-empty-p (string-trim lang))))
-    (let* ((normalized (downcase (string-trim lang)))
-           (resolved (or (map-elt agent-shell-markdown-language-mapping
-                                  normalized)
-                         normalized))
-           (mode (intern (concat resolved "-mode"))))
+  (when-let* ((normalized (agent-shell-markdown--normalize-lang lang)))
+    (let ((mode (intern (concat normalized "-mode"))))
       (when (fboundp mode)
         mode))))
 
@@ -6428,30 +6568,40 @@ one range covering the body \"code\"."
     (save-excursion
       (goto-char (point-min))
       (while (not (eobp))
-        (let ((line-beg (line-beginning-position))
-              (line-end (line-end-position))
-              (open nil))
-          (while-let (((not open))
-                      (span (agent-shell-markdown--next-code-span
-                             :bound line-end :avoid-ranges avoid-ranges)))
-            (if (map-elt span :end)
-                (push (cons (map-elt span :body-start) (map-elt span :body-end))
-                      ranges)
-              (setq open (map-elt span :body-start))))
-          (when open
-            (push (cons open
-                        (if (save-excursion
-                              (goto-char line-beg)
-                              (looking-at-p
-                               agent-shell-markdown--table-pending-line-regexp))
-                            (save-excursion
-                              (goto-char open)
-                              (if (search-forward "|" line-end t)
-                                  (1- (point))
-                                line-end))
-                          line-end))
-                  ranges)))
-        (forward-line 1)))
+        ;; Jump over an avoid-range wholesale rather than walking its
+        ;; lines.  A fenced block can be thousands of lines long, and it
+        ;; holds no inline `code' by definition, so stepping through it
+        ;; line by line on every chunk is what made streaming a large
+        ;; block cost O(body) per chunk (issue #757).
+        (if-let* ((avoid (agent-shell-markdown-in-avoid-range-p
+                          (point) (point) avoid-ranges))
+                  (end (min (cdr avoid) (point-max)))
+                  ((> end (point))))
+            (goto-char end)
+          (let ((line-beg (line-beginning-position))
+                (line-end (line-end-position))
+                (open nil))
+            (while-let (((not open))
+                        (span (agent-shell-markdown--next-code-span
+                               :bound line-end :avoid-ranges avoid-ranges)))
+              (if (map-elt span :end)
+                  (push (cons (map-elt span :body-start) (map-elt span :body-end))
+                        ranges)
+                (setq open (map-elt span :body-start))))
+            (when open
+              (push (cons open
+                          (if (save-excursion
+                                (goto-char line-beg)
+                                (looking-at-p
+                                 agent-shell-markdown--table-pending-line-regexp))
+                              (save-excursion
+                                (goto-char open)
+                                (if (search-forward "|" line-end t)
+                                    (1- (point))
+                                  line-end))
+                            line-end))
+                    ranges))
+            (forward-line 1)))))
     (nreverse ranges)))
 
 (defun agent-shell-markdown--deconstruct (text)
