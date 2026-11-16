@@ -1,0 +1,331 @@
+#+title: Fork notes: EdmondFrank/agent-shell
+#+startup: overview
+#+options: toc:nil
+
+This repository is a personal fork of [[https://github.com/xenodium/agent-shell][xenodium/agent-shell]].  It tracks upstream
+and adds a handful of local features.  These notes are the fork's manual:
+what diverges, why it is arranged the way it is, how to pull upstream in
+without resolving anything by hand, and how to add the next fork feature
+without creating tomorrow's conflict.
+
+* The one rule
+
+  #+begin_quote
+  Fork code never edits an upstream file.
+  #+end_quote
+
+  Upstream-owned files stay byte-identical to =upstream/main=:
+
+  | File                                   | Kept identical |
+  |----------------------------------------+----------------|
+  | =agent-shell.el=                        | yes            |
+  | =agent-shell-ui.el=                     | yes            |
+  | =agent-shell-usage.el=                  | yes            |
+  | =README.org=                            | yes            |
+  | =tests/agent-shell-*-tests.el=          | yes            |
+  | =agent-shell-markdown.el=               | *not yet* (see [[#still-diverging][Still diverging]]) |
+
+  Everything the fork adds lives in =fork/= or in =tests/agent-shell-fork-*-tests.el=.
+  Because git never sees a fork edit inside an upstream file, ~git merge
+  upstream/main~ has nothing to reconcile there: sync conflicts are not
+  reduced, they are structurally impossible.
+
+  The cost the rule buys is *semantic* drift instead of textual conflict:
+  upstream may rewrite a function the fork advises, leaving the wrapper
+  hooked to a shape it no longer has.  That is what the seam manifest and
+  ~fork/bin/fork-sync~ are for ([[#sync][Sync with upstream]]).
+
+* Layout
+
+  #+begin_src text
+  fork/
+    agent-shell-fork.el            entry point: requires the modules, registers the agent
+    agent-shell-fork-aiderdesk.el  AiderDesk agent definition and input history
+    agent-shell-fork-util.el       locating a fragment's body from its model
+    agent-shell-fork-cap.el        body height caps (advice)
+    agent-shell-fork-stream.el     streamed tool-output deltas (advice)
+    agent-shell-fork-usage.el      usage summary on thought group headers
+    overrides.eld                  generated: hash of every seam the fork uses
+    bin/
+      fork-sync                    merge upstream, report drift, test, tag
+      run-tests                    ERT suite with the overlay loaded
+      check-drift.el               compares recorded seam hashes with the checkout
+      generate-overrides.el        re-records them after a review
+      fork-seams.el                the seam list, shared by the two above
+  tests/
+    agent-shell-fork-aiderdesk-tests.el
+    agent-shell-fork-cap-tests.el
+    agent-shell-fork-stream-tests.el
+    agent-shell-fork-usage-tests.el
+  #+end_src
+
+  Load it from your init:
+
+  #+begin_src emacs-lisp
+  (add-to-list 'load-path "~/.emacs.d/site-lisp/agent-shell/fork")
+  (require 'agent-shell-fork)
+  #+end_src
+
+  ~agent-shell-fork~ requires the modules and registers the AiderDesk agent
+  and its key bindings *after* =agent-shell= loads, by appending to
+  ~agent-shell-agent-configs~ and calling ~keymap-set~ on
+  ~agent-shell-mode-map~.  Both are plain data, so no core file is touched.
+
+* Fork features (user documentation)
+
+** AiderDesk agent
+
+   =fork/agent-shell-fork-aiderdesk.el= adds [[https://aiderdesk.com][AiderDesk]] as an agent: the
+   umbrella asks the ACP bridge (=aiderdesk-acp-bridge=) for the session, and
+   the shell gets AiderDesk's server-side input history and quick session
+   switching.
+
+   Install the bridge (from its checkout) and make sure it is on =PATH=:
+
+   #+begin_src bash
+   bun install
+   bun link
+   #+end_src
+
+   or build a standalone binary with ~bun run build~.  The AiderDesk server
+   must be running locally (~aiderdesk~ or ~aiderdesk start~) before starting
+   the shell: the bridge talks to it over HTTP.
+
+   Commands and bindings:
+
+   | Command                                  | Binding      | Does                                              |
+   |------------------------------------------+--------------+---------------------------------------------------|
+   | ~agent-shell-aiderdesk-start-agent~       |              | Start an AiderDesk agent shell                    |
+   | ~agent-shell-aiderdesk-input-history~     |              | Pick an entry from the server's input history      |
+   | ~agent-shell-aiderdesk-previous-input~    | ~M-<up>~       | Walk backwards through history into the prompt     |
+   | ~agent-shell-aiderdesk-next-input~        | ~M-<down>~     | Walk forwards through history into the prompt      |
+   | ~agent-shell-aiderdesk-set-agent-profile~ |              | Switch the session's agent profile                 |
+   | ~agent-shell-aiderdesk-set-autonomy-mode~ |              | Switch the session's autonomy mode                 |
+
+   | Option                             | Default                 | Does                                  |
+   |------------------------------------+-------------------------+---------------------------------------|
+   | ~agent-shell-aiderdesk-acp-command~ | ~("aiderdesk-acp-bridge")~ | Bridge command and its arguments      |
+   | ~agent-shell-aiderdesk-environment~ | ~nil~                     | Environment variables for the bridge   |
+
+   The agent also appears in the ordinary agent picker, because it is
+   appended to ~agent-shell-agent-configs~.
+
+** Capped expanded sections
+
+   A long thought or tool-use body no longer pushes the conversation off
+   screen: an expanded section shows its first N lines and hides the rest
+   behind an ellipsis.  The body keeps its whole text -- copying,
+   searching and the transcript are unaffected -- and the elision is an
+   empty overlay, so no buffer text is added for the markdown renderer to
+   rewrite.
+
+   | Option                                  | Default | Does                                        |
+   |-----------------------------------------+---------+---------------------------------------------|
+   | ~agent-shell-fork-thought-max-height~     | ~15~    | Lines shown for an expanded thought section |
+   | ~agent-shell-fork-tool-max-height~        | ~15~    | Lines shown for an expanded tool section    |
+
+   ~nil~ means no limit.  Only activity-group members are capped; ordinary
+   conversation fragments stream unbounded.
+
+   Behaviour: the body stays capped while it streams.  The first toggle
+   on a capped body reveals all of it and the choice sticks for that
+   fragment (~:cap-expanded~), so reading a section never fights a cap
+   that keeps coming back.
+
+   Migration: the old inline knobs ~agent-shell-thought-process-max-height~
+   and ~agent-shell-tool-use-max-height~ are gone.  In an init file:
+
+   #+begin_src emacs-lisp
+   ;; before
+   (setq agent-shell-thought-process-max-height 20
+         agent-shell-tool-use-max-height 40)
+   ;; after
+   (setq agent-shell-fork-thought-max-height 20
+         agent-shell-fork-tool-max-height 40)
+   #+end_src
+
+** Streamed tool output appends only the delta
+
+   Agents stream tool output by re-sending the whole accumulated text on
+   every update.  Upstream re-renders the body for each chunk; the fork
+   notices that the new body is a strict extension of what is already
+   displayed and appends only the grown tail through upstream's own
+   ~:append~ path.  Cost per chunk becomes O(new text) instead of
+   O(body).
+
+   No option: it falls back to a full replace whenever appending would
+   not be equivalent -- a body that is not an extension, a diff rendered
+   after the output, a truncated long line, an open elicitation form.
+
+** Usage summary on thought group headers
+
+   A group header that holds a thought carries a compact usage suffix
+   (~Context: 45k/200k, Tokens: 92k in · 12k out, Cost: $0.06~) that
+   tracks the live usage data, so cost and context are visible where the
+   work is rather than only in the header line.
+
+* Still diverging
+
+  =agent-shell-markdown.el= (and its fork blocks in
+  =tests/agent-shell-markdown-tests.el=) is the one upstream file the fork
+  still edits: tree-sitter fontification of fenced blocks, a cap on
+  opening-fence rendering while streaming, and
+  ~agent-shell-markdown-max-highlight-length~.
+
+  The intended home is upstream's public hook
+  ~agent-shell-markdown-render-functions~: a renderer receives
+  ~:source-blocks~, claims the fenced blocks, renders them in place and
+  tags the result ~agent-shell-markdown-frozen~ (plus
+  ~agent-shell-markdown-source~ for ~agent-shell-copy-as-markdown~).  Until
+  that port happens, expect a conflict *only* in this file, and only when
+  upstream touches the fenced-block or highlighting code.
+
+* Sync with upstream
+
+** Normal path
+
+   #+begin_src bash
+   fork/bin/fork-sync
+   #+end_src
+
+   It refuses a dirty tree, fetches =upstream=, prints the incoming
+   commits, merges ~upstream/main~ (merge, not rebase: fork commits are
+   published), reports seam drift, runs the suite, and tags
+   ~fork/upstream-YYYYMMDD~.
+
+   Remote layout it assumes ([[#remote-layout][set once]]):
+
+   | Remote     | URL                                      | Role        |
+   |------------+------------------------------------------+-------------|
+   | ~upstream~   | xenodium/agent-shell                     | read only   |
+   | ~origin~     | EdmondFrank/agent-shell                  | push here   |
+
+   ~main~ tracks ~upstream/main~ for pulls, and ~remote.pushDefault~ points
+   pushes at ~origin~.
+
+** When the merge stops
+
+   Upstream files should never conflict.  If one does, the tree holds a
+   hand edit inside an upstream file -- revert it and express the
+   behaviour as a fork module ([[#adding][Adding a fork feature]]).  Conflicts
+   inside =fork/= are ordinary fork-code conflicts: resolve, ~git add~,
+   ~git merge --continue~, then ~fork/bin/fork-sync --no-test~.
+
+** Seam drift
+
+   ~fork/overrides.eld= records a hash of every upstream definition the
+   overlay leans on (each advice target, the label function variable, the
+   lookup helpers).  After a merge, ~check-drift.el= hashes the checkout
+   again and prints, for every mismatch:
+
+   #+begin_example
+   DRIFT agent-shell-ui-update-fragment (function)
+         cap: re-derives the cut after every insert and streamed update
+   #+end_example
+
+   Drift is not a failure: it means upstream changed code the fork wraps.
+   Open the named wrapper, confirm it still does what its docstring says,
+   run the suite, then re-record:
+
+   #+begin_src bash
+   emacs --batch -Q -L . -L fork -L fork/bin \
+     -L "$HOME/.emacs.d/acp" -L "$HOME/.emacs.d/shell-maker" \
+     -l fork/bin/generate-overrides.el
+   #+end_src
+
+   Any seam that is *gone* (renamed, deleted) shows up as a drift line and
+   as a failing fork test, because each module degrades loudly rather than
+   silently: ~require~ of a missing feature is skipped, and the module's
+   advice simply stops matching.
+
+** Recovering from a bad merge
+
+   #+begin_src bash
+   git merge --abort                 # before committing
+   git reset --hard fork/upstream-YYYYMMDD   # after: last good tag
+   #+end_src
+
+   ~rerere.enabled~ and ~merge.conflictStyle=zdiff3~ are set in this
+   clone, so a conflict already resolved once is replayed automatically and
+   conflict hunks show the common ancestor.
+
+* Adding a fork feature
+
+  Pick the cheapest seam that expresses the behaviour, in this order:
+
+  1. *Plain data*: a registry to append to (~agent-shell-agent-configs~), a
+     keymap (~keymap-set~), a variable to wrap
+     (~agent-shell-activity-group-header-label-function~).  No advice at all.
+  2. *A documented hook*: ~agent-shell-markdown-render-functions~,
+     ~agent-shell-ui-post-expand-fragment-at-point-hook~,
+     ~agent-shell-mode-hook~, ~agent-shell-subscribe-to~ events.
+  3. *Advice* on a public function (~agent-shell-ui-update-fragment~): one
+     wrapper, added in a fork module, with a docstring that says what
+     upstream behaviour it assumes.
+  4. *Advice* on an internal function with a name that reads like a
+     contract, only when nothing above fits.  Record it in
+     ~fork/fork-seams.el= and note what breaks if it changes.
+  5. *Editing an upstream file*: never.  If a feature truly needs it, that
+     is upstream's decision to make, not the fork's.
+
+  Checklist for a new module:
+
+  - file =fork/agent-shell-fork-<name>.el=, loaded from ~agent-shell-fork~;
+  - every wrapper guards what it assumes (~ignore-errors~ around
+    post-processing, ~when-let*~ on lookups) so a moved seam degrades to
+    stock behaviour instead of breaking the shell;
+  - seam added to ~fork/fork-seams.el=, manifest regenerated;
+  - tests in =tests/agent-shell-fork-<name>-tests.el=, asserting
+    behaviour (visible text, which path ran) rather than internals;
+  - a section in this file and a row in the inventory below.
+
+* Divergence inventory
+
+  | Fork piece                       | Upstream seam                             | Kind            | Status        |
+  |----------------------------------+-------------------------------------------+-----------------+---------------|
+  | AiderDesk agent + history         | ~agent-shell-agent-configs~, keymap        | data            | supported     |
+  | Body caps                         | advice on ~agent-shell-ui-update-fragment~ | advice          | supported     |
+  |                                   | advice on ~agent-shell-ui-toggle-fragment~ | advice          | supported     |
+  | Streamed deltas                   | ~:filter-args~ on the same update call      | advice          | supported     |
+  | Usage summary                     | label-function wrap + usage advice          | data + advice   | supported     |
+  | Tree-sitter fenced blocks         | none yet                                    | *upstream edit* | *not ported*  |
+
+  Everything in the first four rows survives an upstream sync without a
+  merge conflict; the last row is the one file to watch.
+
+* Verifying a checkout
+
+  #+begin_src bash
+  fork/bin/run-tests        # whole ERT suite with the overlay loaded
+  #+end_src
+
+  Baseline on this machine (macOS, Emacs 29.4): 1075 tests, 18 failures
+  that are environmental (graphical header, session-list fakes,
+  ellicitation capability, type-ahead restore) and pre-date the fork.
+  Compare against that number, not zero.
+
+  Byte-compiling the fork modules is a cheap extra check:
+
+  #+begin_src bash
+  emacs --batch -Q -L . -L fork -L "$HOME/.emacs.d/acp" \
+        -L "$HOME/.emacs.d/shell-maker" \
+        --eval '(setq byte-compile-error-on-warn nil)' \
+        -f batch-byte-compile fork/*.el
+  #+end_src
+
+* Remote layout
+
+  Set once, per clone:
+
+  #+begin_src bash
+  git remote rename origin upstream
+  git remote add origin https://github.com/EdmondFrank/agent-shell.git
+  git config remote.pushDefault origin
+  git config branch.main.remote upstream
+  git config branch.main.rebase false
+  git config rerere.enabled true
+  git config merge.conflictStyle zdiff3
+  #+end_src
+
+  ~bench/~ is excluded through ~$(git rev-parse --git-common-dir)/info/exclude~
+  rather than =.gitignore=, since =.gitignore= is upstream's file.

@@ -1,0 +1,89 @@
+#!/bin/sh
+# fork-sync -- merge upstream into the fork, then verify and tag.
+#
+# The fork keeps every upstream-owned file byte-identical to
+# upstream/main (see FORK.org), so this merge has nothing to reconcile;
+# what it can do is tell you when an upstream commit moved a seam the
+# overlay leans on, and refuse to tag a tree that does not pass its
+# tests.
+#
+# Usage: fork/bin/fork-sync [--no-test]
+
+set -eu
+
+root=$(cd "$(dirname "$0")/../.." && pwd)
+cd "$root"
+
+acp=${ACP_DIR:-$HOME/.emacs.d/acp}
+shell_maker=${SHELL_MAKER_DIR:-$HOME/.emacs.d/shell-maker}
+run_tests=1
+[ "${1:-}" = "--no-test" ] && run_tests=0
+
+say() { printf '\n=== %s\n' "$*"; }
+die() { printf 'fork-sync: %s\n' "$*" >&2; exit 1; }
+
+say "preflight"
+[ -z "$(git status --porcelain)" ] || die "working tree is dirty; commit or stash first"
+current=$(git rev-parse --abbrev-ref HEAD)
+[ "$current" = "main" ] || die "on '$current', not main"
+
+git fetch upstream --quiet
+
+say "incoming commits"
+git log --oneline HEAD..upstream/main || true
+ahead=$(git rev-list --count upstream/main..HEAD)
+printf 'fork commits on top of upstream: %s\n' "$ahead"
+
+say "merge"
+if ! git merge --no-ff --no-edit upstream/main; then
+  cat >&2 <<'EOF'
+
+Merge stopped.  Upstream-owned files should never conflict -- that is
+the point of the overlay -- so a conflict here means either
+  * fork/ changed (fix it, it is fork code), or
+  * an upstream file was edited by hand (revert it, and express the
+    behaviour as a fork module instead; see FORK.org).
+Resolve, `git add' the result, `git merge --continue', then:
+  fork/bin/fork-sync --no-test
+EOF
+  exit 1
+fi
+
+say "seam drift"
+drift_status=0
+emacs --batch -Q \
+  -L . -L fork -L fork/bin -L "$acp" -L "$shell_maker" \
+  --eval "(setq default-directory \"$root/\")" \
+  -l fork/bin/check-drift.el || drift_status=$?
+if [ "$drift_status" -eq 2 ]; then
+  cat <<'EOF'
+
+An upstream definition the overlay hooks into changed.  Nothing is
+broken yet -- the merge already happened -- but each DRIFT line above
+needs a look: open the named wrapper under fork/ and confirm it still
+means what it says.  Re-record the hashes once reviewed:
+
+  emacs --batch -Q -L . -L fork -L fork/bin -L "$ACP_DIR" -L "$SHELL_MAKER_DIR" \
+    -l fork/bin/generate-overrides.el
+
+Then update the inventory table in FORK.org.
+EOF
+elif [ "$drift_status" -ne 0 ]; then
+  die "drift check failed to run (status $drift_status)"
+fi
+
+if [ "$run_tests" -eq 1 ]; then
+  say "tests"
+  fork/bin/run-tests || die "tests failed; fix or use --no-test"
+fi
+
+tag="fork/upstream-$(date +%Y%m%d)"
+git tag -f "$tag" >/dev/null
+say "tagged $tag"
+cat <<EOF
+
+Next:
+  * update the divergence inventory in FORK.org (what landed upstream,
+    what is still fork-only)
+  * push when happy: git push origin main --tags
+EOF

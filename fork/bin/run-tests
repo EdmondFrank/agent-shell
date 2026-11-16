@@ -1,0 +1,23 @@
+#!/bin/sh
+# run-tests -- load the fork overlay and run the whole ERT suite.
+#
+# Mirrors .github/workflows/test.yml, but adds fork/ to the load path
+# and requires `agent-shell-fork' before the tests load, so the fork's
+# own tests run and upstream's tests run against the overlaid package.
+#
+# Env: ACP_DIR, SHELL_MAKER_DIR (defaults: ~/.emacs.d/acp, ~/.emacs.d/shell-maker)
+
+set -eu
+
+root=$(cd "$(dirname "$0")/../.." && pwd)
+cd "$root"
+
+acp=${ACP_DIR:-$HOME/.emacs.d/acp}
+shell_maker=${SHELL_MAKER_DIR:-$HOME/.emacs.d/shell-maker}
+
+exec emacs --batch -Q \
+  -L . -L fork -L "$acp" -L "$shell_maker" \
+  --load tests/agent-shell-fakes.el \
+  --eval '(require (quote agent-shell-fork))' \
+  $(find tests -name '*-tests.el' | sort | sed 's/^/--load /') \
+  -f ert-run-tests-batch-and-exit
