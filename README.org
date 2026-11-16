@@ -1310,6 +1310,7 @@ always go to Evil modes if you need to with ~C-z~).
 | agent-shell-text-file-capabilities             | Whether agents are initialized with read/write text file capabilities.          |
 | agent-shell-thought-process-expand-by-default  | Whether thought process sections should be expanded by default.                 |
 | agent-shell-thought-process-icon               | Icon displayed during the AI’s thought process.                                 |
+| agent-shell-thought-process-max-height         | Maximum lines shown for an expanded thought process section (nil: no limit).    |
 | agent-shell-tool-use-expand-by-default         | Whether tool use sections should be expanded by default.                        |
 | agent-shell-transcript-file-path-function      | Function to generate the full transcript file path.                             |
 | agent-shell-ui-mode-hook                       | Hook run after entering or leaving ‘agent-shell-ui-mode’.                       |

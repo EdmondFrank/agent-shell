@@ -112,7 +112,7 @@ is what leaves it in place."
   (when-let* ((help (agent-shell-ui--fragment-help-echo qualified-id)))
     (list 'help-echo help)))
 
-(cl-defun agent-shell-ui-make-fragment-model (&key (namespace-id "global") (block-id "1") label-left label-right body group-id group-label (group-expanded t))
+(cl-defun agent-shell-ui-make-fragment-model (&key (namespace-id "global") (block-id "1") label-left label-right body group-id group-label (group-expanded t) max-height)
   "Create a fragment model alist.
 NAMESPACE-ID, BLOCK-ID, LABEL-LEFT, LABEL-RIGHT, and BODY are the keys.
 
@@ -120,7 +120,13 @@ GROUP-ID nests this fragment under a collapsible group header (a sibling
 fragment with `block-id' GROUP-ID in the same namespace).  When that
 header does not yet exist, GROUP-LABEL materializes it (auto-create) with
 GROUP-EXPANDED as its initial fold state.  GROUP-ID nil means a top-level
-fragment."
+fragment.
+
+MAX-HEIGHT caps how many body lines an expanded fragment shows.  The
+body keeps its whole text in the buffer (copying, searching and the
+transcript are unaffected); lines past MAX-HEIGHT are hidden behind an
+ellipsis, and expanding the fragment reveals them all.  See
+`agent-shell-ui--apply-body-cap'."
   (list (cons :namespace-id namespace-id)
         (cons :block-id block-id)
         (cons :label-left (agent-shell-ui--string-or-nil label-left))
@@ -128,7 +134,8 @@ fragment."
         (cons :body (agent-shell-ui--string-or-nil body))
         (cons :group-id (agent-shell-ui--string-or-nil group-id))
         (cons :group-label (agent-shell-ui--string-or-nil group-label))
-        (cons :group-expanded group-expanded)))
+        (cons :group-expanded group-expanded)
+        (cons :max-height max-height)))
 
 (cl-defun agent-shell-ui-make-group-model (&key (namespace-id "global") (block-id "1") label-left label-right (expanded t))
   "Create a group-header model alist.
@@ -328,10 +335,16 @@ O(accumulated-body).  Label-only updates leave the body untouched."
                                       (cons :body new-body)
                                       ;; Preserve the parent group + indent so
                                       ;; the regenerated child stays nested.
+                                      (cons :max-height
+                                            (map-elt model :max-height))
+                                      (cons :cap-expanded
+                                            (map-elt state :cap-expanded))
                                       (cons :group-qualified-id
                                             (map-elt model :group-qualified-id))
                                       (cons :group-indent
                                             (map-elt model :group-indent)))))
+                          (agent-shell-ui--clear-cap-markers
+                           block-start current-block-end)
                           (delete-region block-start current-block-end)
                           (goto-char block-start)
                           (agent-shell-ui--insert-fragment
@@ -485,6 +498,122 @@ trailing-whitespace tail."
         (add-text-properties (point) body-end
                              '(invisible t rear-nonsticky (invisible)))))))
 
+;;; Capped bodies
+;;
+;; A fragment may cap how many body lines it shows while expanded (see
+;; `agent-shell-ui-make-fragment-model' MAX-HEIGHT), so a long, still
+;; streaming body does not push everything else off screen.
+;;
+;; The body keeps its whole text in the buffer: the tail is hidden with
+;; `invisible', the same property folding uses, so copying, searching
+;; and the transcript are unaffected.  The elision is an empty overlay
+;; with an `after-string', which renders at the end of the last visible
+;; line without adding buffer text for the markdown renderer to rewrite
+;; or a copy to pick up.
+;;
+;; Hiding is incremental: appending a chunk only touches the chars it
+;; wrote, and the cut is re-derived from the body's start (a handful of
+;; lines), so a capped body costs the same per chunk as an uncapped one
+;; (issue #757).
+
+(defconst agent-shell-ui--cap-ellipsis " …"
+  "Text shown at the end of a capped body's last visible line.")
+
+(defun agent-shell-ui--cap-boundary (body-start body-end max-height)
+  "Return where a MAX-HEIGHT-line view of a body ends.
+BODY-START and BODY-END delimit the body.  Returns nil when the body
+has no more than MAX-HEIGHT lines, or MAX-HEIGHT is not a positive
+integer."
+  (when (and (integerp max-height)
+             (> max-height 0))
+    (save-excursion
+      (goto-char body-start)
+      (forward-line max-height)
+      (when (< (point) body-end)
+        (point)))))
+
+(defun agent-shell-ui--cap-marker-overlays (beg end)
+  "Return the cap elision overlays within [BEG, END)."
+  (seq-filter (lambda (overlay)
+                (overlay-get overlay 'agent-shell-ui-cap-marker))
+              (overlays-in beg end)))
+
+(defun agent-shell-ui--cap-marker-at (position)
+  "Return the cap elision overlay at POSITION, if any."
+  (seq-find (lambda (overlay)
+              (overlay-get overlay 'agent-shell-ui-cap-marker))
+            (overlays-at position)))
+
+(defun agent-shell-ui--clear-cap-markers (beg end)
+  "Remove the cap elision overlays within [BEG, END)."
+  (seq-do #'delete-overlay (agent-shell-ui--cap-marker-overlays beg end)))
+
+(cl-defun agent-shell-ui--set-cap-marker (&key body-start body-end position)
+  "Show a capped body's ellipsis at POSITION within [BODY-START, BODY-END).
+With POSITION nil, drop the ellipsis instead.  The marker is an empty
+overlay carrying `after-string', so it sits after the last visible line
+of the body and moves with the text around it."
+  (let ((markers (agent-shell-ui--cap-marker-overlays body-start body-end)))
+    (if (null position)
+        (seq-do #'delete-overlay markers)
+      (let ((marker (or (seq-first markers)
+                        (make-overlay position position))))
+        (seq-do #'delete-overlay (seq-rest markers))
+        (move-overlay marker position position)
+        (overlay-put marker 'agent-shell-ui-cap-marker t)
+        (overlay-put marker 'after-string
+                     (propertize agent-shell-ui--cap-ellipsis
+                                 'face 'agent-shell-section-annotation
+                                 'help-echo "RET shows the rest of this section"))))))
+
+(defun agent-shell-ui--ensure-cap-marker (body-start body-end position)
+  "Show the cap ellipsis at POSITION within [BODY-START, BODY-END).
+Reuses a marker already sitting there, which is the case on every
+streamed chunk once the cut is in place."
+  (unless (agent-shell-ui--cap-marker-at position)
+    (agent-shell-ui--set-cap-marker :body-start body-start
+                                    :body-end body-end
+                                    :position position)))
+
+(defun agent-shell-ui--apply-body-cap (body-start body-end max-height)
+  "Show at most MAX-HEIGHT lines of the visible body [BODY-START, BODY-END).
+Hides the rest and leaves an ellipsis at the cut.  With MAX-HEIGHT nil,
+or a body that already fits, shows the whole body instead."
+  (when (and body-start body-end (< body-start body-end))
+    (if-let* ((boundary (agent-shell-ui--cap-boundary body-start body-end max-height)))
+        (progn
+          (put-text-property boundary body-end 'invisible t)
+          (agent-shell-ui--ensure-cap-marker body-start body-end boundary))
+      (remove-text-properties body-start body-end '(invisible nil))
+      (agent-shell-ui--set-cap-marker :body-start body-start
+                                      :body-end body-end
+                                      :position nil)
+      (agent-shell-ui--apply-trailing-whitespace-invisible body-start body-end))))
+
+(defun agent-shell-ui--body-cap (state)
+  "Return the line cap a fragment with STATE still applies, or nil.
+Nil when STATE carries no cap, or the user expanded past it for this
+fragment (`:cap-expanded')."
+  (when-let* ((max-height (map-elt state :max-height))
+              ((not (map-elt state :cap-expanded))))
+    max-height))
+
+(defun agent-shell-ui--ensure-body-cap (body-start body-end)
+  "Re-hide a capped body's tail when rendering exposed it.
+`agent-shell-markdown' rewrites body chars, and a rewritten char loses
+the `invisible' the cap put on it.  Checking the body's last char
+keeps the cap in place without walking a body that is still hidden
+(issue #757).  Rendering can also shorten the body \\(it drops markup
+chars), so BODY-END is clamped to the accessible buffer: a caller that
+is still narrowed to the rendered body passes the pre-render end."
+  (let ((body-end (min body-end (point-max))))
+    (when-let* ((state (and (< body-start body-end)
+                            (get-text-property body-start 'agent-shell-ui-state)))
+                (max-height (agent-shell-ui--body-cap state))
+                (boundary (agent-shell-ui--cap-boundary body-start body-end max-height))
+                ((not (eq (get-text-property (1- body-end) 'invisible) t))))
+      (put-text-property boundary body-end 'invisible t))))
+
 (defun agent-shell-ui--append-body (body-range chunk qualified-id _collapsed)
   "Append CHUNK to the body region described by BODY-RANGE.
 
@@ -504,7 +633,13 @@ state, because label-less fragments don't follow `state :collapsed'
            (body-end (map-elt body-range :end))
            (state (get-text-property (max body-start (1- body-end))
                                      'agent-shell-ui-state))
-           (body-invisible (agent-shell-ui--body-invisible-p body-start body-end)))
+           (body-invisible (agent-shell-ui--body-invisible-p body-start body-end))
+           (cap (and (not body-invisible)
+                     (agent-shell-ui--body-cap state)))
+           ;; A capped body's tail is one long invisible run of the cap's
+           ;; own making.  Clearing it as trailing whitespace would uncap,
+           ;; then re-hide, the whole body on every chunk (issue #757).
+           (capped-tail (agent-shell-ui--cap-boundary body-start body-end cap)))
       ;; Trailing-whitespace invisibility on the old tail may no longer
       ;; apply once the chunk lands — clear and re-derive.  Only when
       ;; the body is visible; for a hidden body the existing invisible
@@ -515,7 +650,7 @@ state, because label-less fragments don't follow `state :collapsed'
       ;; clearing just the tail is equivalent to clearing the whole body
       ;; without walking every property interval on each chunk (the whole
       ;; body grows, so a full clear is O(body) per chunk).
-      (unless body-invisible
+      (unless (or body-invisible capped-tail)
         (when (and (< body-start body-end)
                    (eq (get-text-property (1- body-end) 'invisible) t))
           (let ((tail-start (or (previous-single-property-change
@@ -531,6 +666,13 @@ state, because label-less fragments don't follow `state :collapsed'
            insert-start insert-end qualified-id state body-invisible)
           (agent-shell-ui--apply-trailing-whitespace-invisible
            body-start insert-end)
+          ;; A capped body stays capped as it streams: hide whatever part
+          ;; of this chunk fell past the cut, and keep the ellipsis at it.
+          (when-let* ((boundary (agent-shell-ui--cap-boundary
+                                 body-start insert-end cap)))
+            (put-text-property (max boundary insert-start) insert-end
+                               'invisible t)
+            (agent-shell-ui--ensure-cap-marker body-start insert-end boundary))
           ;; The body grew by exactly what we inserted, so the caller can
           ;; take the new range from here instead of searching the block's
           ;; accumulated intervals for it again (issue #757).
@@ -552,6 +694,8 @@ matches the body's current visibility, not caller-supplied state."
          (state (get-text-property (max body-start (1- body-end))
                                    'agent-shell-ui-state))
          (body-invisible (agent-shell-ui--body-invisible-p body-start body-end)))
+    ;; The old body's chars go away, taking the ellipsis anchored to them.
+    (agent-shell-ui--clear-cap-markers body-start body-end)
     (delete-region body-start body-end)
     (goto-char body-start)
     (when (and (stringp new-body) (not (string-empty-p new-body)))
@@ -572,8 +716,13 @@ matches the body's current visibility, not caller-supplied state."
     ;; Point sits at the end of what we wrote (or at BODY-START when the
     ;; new body was empty), so the caller can take the new range from here
     ;; rather than searching the block for it again (issue #757).
-    (list (cons :start body-start)
-          (cons :end (point)))))
+    (let ((new-end (point)))
+      ;; A rewritten body is capped afresh, as a fresh body would be.
+      (unless body-invisible
+        (agent-shell-ui--apply-body-cap
+         body-start new-end (agent-shell-ui--body-cap state)))
+      (list (cons :start body-start)
+            (cons :end new-end)))))
 
 (defun agent-shell-ui--label-rendered-p (text section start end)
   "Return non-nil when the region START to END already renders TEXT.
@@ -689,6 +838,7 @@ When NO-UNDO is non-nil, disable undo recording for this operation."
                       (not (get-text-property (point) 'agent-shell-ui-state)))
             (forward-char 1))
           (setq block-end (point))
+          (agent-shell-ui--clear-cap-markers block-start block-end)
           (delete-region block-start block-end))))))
 
 (cl-defun agent-shell-ui--block-range (&key position)
@@ -1031,7 +1181,12 @@ Leaf: hide/show its body per `:collapsed'.  Group: recurse into children."
         ;; next child still gets its own separator.
         (unless (map-elt state :collapsed)
           (agent-shell-ui--apply-trailing-whitespace-invisible
-           (map-elt body :start) (map-elt body :end)))))))
+           (map-elt body :start) (map-elt body :end))
+          ;; Showing a child again re-applies its cap, unless it asked
+          ;; for the whole body before it was folded.
+          (agent-shell-ui--apply-body-cap
+           (map-elt body :start) (map-elt body :end)
+           (agent-shell-ui--body-cap state)))))))
 
 (cl-defun agent-shell-ui--set-group-collapsed (&key group-qualified-id collapsed include-children)
   "Fold or unfold group GROUP-QUALIFIED-ID (recompute-on-toggle).
@@ -1067,8 +1222,12 @@ collapsing closes them all.
                        :group-qualified-id group-qualified-id))
               (state (get-text-property (map-elt header :start) 'agent-shell-ui-state)))
     (if collapsed
-        (put-text-property (map-elt region :start) (map-elt region :end)
-                           'invisible t)
+        (progn
+          (put-text-property (map-elt region :start) (map-elt region :end)
+                             'invisible t)
+          ;; The children's ellipses go away with their hidden bodies.
+          (agent-shell-ui--clear-cap-markers (map-elt region :start)
+                                             (map-elt region :end)))
       (put-text-property (map-elt region :start) (map-elt region :end)
                          'invisible nil)
       (dolist (child (agent-shell-ui--group-children
@@ -1225,6 +1384,8 @@ indents a child's header line under its group header."
                             (cons :group-id group-qualified-id)
                             (cons :group-indent group-indent)
                             (cons :collapsed (not expanded))
+                            (cons :max-height (map-elt model :max-height))
+                            (cons :cap-expanded (map-elt model :cap-expanded))
                             (cons :navigatable (cond
                                                 ((eq navigation 'never) nil)
                                                 ((eq navigation 'always) t)
@@ -1235,7 +1396,15 @@ indents a child's header line under its group header."
                                                  ;; Default to auto
                                                  (and body indicator-start))))))
     (put-text-property block-start (or body-end label-right-end label-left-end) 'read-only t)
-    (put-text-property block-start (or body-end label-right-end label-left-end) 'front-sticky '(read-only))))
+    (put-text-property block-start (or body-end label-right-end label-left-end) 'front-sticky '(read-only))
+    ;; Cap the body now that the state is readable from it.  A label-less
+    ;; fragment's body is visible regardless of EXPANDED.
+    (when (and body-start
+               (or expanded (null collapsable)))
+      (agent-shell-ui--apply-body-cap
+       body-start body-end
+       (unless (map-elt model :cap-expanded)
+         (map-elt model :max-height))))))
 
 (cl-defun agent-shell-ui-update-text (&key namespace-id block-id text append create-new no-undo)
   "Update or insert a plain text entry identified by NAMESPACE-ID and BLOCK-ID.
@@ -1320,11 +1489,16 @@ When NO-UNDO is non-nil, disable undo recording."
         (skip-chars-backward "\n")
         (make-string (max 0 (- desired (- pos (point)))) ?\n)))))
 
-(defun agent-shell-ui--toggle-fragment-at-point ()
+(defun agent-shell-ui--toggle-fragment-at-point (&optional uncap)
   "Toggle visibility of fragment body at point.
 Internal primitive; callers must position point on the fragment's
 state-property range first.  User-facing toggling goes through
-`agent-shell-ui-toggle-fragment'."
+`agent-shell-ui-toggle-fragment'.
+
+With UNCAP non-nil, an expanded body that a cap is trimming shows in
+full before it folds, so a user asking to expand is never answered with
+the same truncated view.  Programmatic folding leaves UNCAP nil: it
+wants the fold, not the reveal."
   (save-mark-and-excursion
     (if-let* ((state (get-text-property (point) 'agent-shell-ui-state))
               ((eq (map-elt state :kind) 'group))
@@ -1333,10 +1507,12 @@ state-property range first.  User-facing toggling goes through
         (agent-shell-ui--set-group-collapsed
          :group-qualified-id (map-elt state :qualified-id)
          :collapsed (not (map-elt state :collapsed)))
-      (agent-shell-ui--toggle-leaf-fragment-at-point))))
+      (agent-shell-ui--toggle-leaf-fragment-at-point uncap))))
 
-(defun agent-shell-ui--toggle-leaf-fragment-at-point ()
-  "Toggle visibility of a non-group fragment's body at point."
+(defun agent-shell-ui--toggle-leaf-fragment-at-point (&optional uncap)
+  "Toggle visibility of a non-group fragment's body at point.
+With UNCAP non-nil, an expanded body still under a cap reveals all of
+itself first instead of folding."
   (save-mark-and-excursion
     (when-let* ((inhibit-read-only t)
                 (buffer-undo-list t)
@@ -1363,33 +1539,66 @@ state-property range first.  User-facing toggling goes through
                                               :end)))
                 ;; Must be saved before deleting region.
                 (indicator-properties (text-properties-at (map-elt indicator :start))))
-      (let ((new-collapsed-state (not (map-elt state :collapsed))))
-        ;; Toggle invisible text property including newlines before body
-        (put-text-property invisible-start
-                           (map-elt body :end)
-                           'invisible new-collapsed-state)
-        ;; Update indicator
-        (delete-region (map-elt indicator :start)
-                       (map-elt indicator :end))
-        (goto-char (map-elt indicator :start))
-        (insert (if new-collapsed-state "▶ " "▼ "))
-        ;; Update state
-        (add-text-properties (map-elt indicator :start)
-                             (point) indicator-properties)
-        (map-put! state :collapsed new-collapsed-state)
-        (put-text-property (map-elt block :start)
-                           (map-elt block :end) 'agent-shell-ui-state state)
-        (unless new-collapsed-state
-          ;; Expanding unhid the body's trailing newlines too.  Left
-          ;; visible, a group child added below counts them as its
-          ;; separator (see `agent-shell-ui--required-newlines') and
-          ;; inserts none, so collapsing again pulls that child onto
-          ;; this header line.
-          (agent-shell-ui--apply-trailing-whitespace-invisible
-           (map-elt body :start) (map-elt body :end))
-          (save-restriction
-            (narrow-to-region (map-elt body :start) (map-elt body :end))
-            (run-hooks 'agent-shell-ui-post-expand-fragment-at-point-hook)))))))
+      (let* ((body-start (map-elt body :start))
+             (body-end (map-elt body :end))
+             (cap (agent-shell-ui--body-cap state))
+             ;; A capped body takes two presses to read whole: the first
+             ;; reveals what the cap hides, the next folds it away.  The
+             ;; cap is only the default view, so asking to expand wins.
+             (uncap (and uncap cap
+                         (not (map-elt state :collapsed))
+                         (not (agent-shell-ui--body-invisible-p body-start body-end))))
+             (new-collapsed-state (and (not uncap)
+                                       (not (map-elt state :collapsed)))))
+        (if uncap
+            (progn
+              (map-put! state :cap-expanded t)
+              (put-text-property body-start body-end 'invisible nil)
+              (agent-shell-ui--set-cap-marker :body-start body-start
+                                              :body-end body-end
+                                              :position nil)
+              (agent-shell-ui--apply-trailing-whitespace-invisible
+               body-start body-end)
+              (put-text-property (map-elt block :start)
+                                 (map-elt block :end) 'agent-shell-ui-state state))
+          ;; Toggle invisible text property including newlines before body
+          (put-text-property invisible-start
+                             (map-elt body :end)
+                             'invisible new-collapsed-state)
+          ;; A folded body has no visible tail left to trim.
+          (when new-collapsed-state
+            (agent-shell-ui--set-cap-marker :body-start body-start
+                                            :body-end body-end
+                                            :position nil))
+          ;; Update indicator
+          (delete-region (map-elt indicator :start)
+                         (map-elt indicator :end))
+          (goto-char (map-elt indicator :start))
+          (insert (if new-collapsed-state "▶ " "▼ "))
+          ;; Update state
+          (add-text-properties (map-elt indicator :start)
+                               (point) indicator-properties)
+          (map-put! state :collapsed new-collapsed-state)
+          (put-text-property (map-elt block :start)
+                             (map-elt block :end) 'agent-shell-ui-state state)
+          (unless new-collapsed-state
+            ;; Expanding unhid the body's trailing newlines too.  Left
+            ;; visible, a group child added below counts them as its
+            ;; separator (see `agent-shell-ui--required-newlines') and
+            ;; inserts none, so collapsing again pulls that child onto
+            ;; this header line.
+            (agent-shell-ui--apply-trailing-whitespace-invisible
+             (map-elt body :start) (map-elt body :end))
+            ;; Expanding back into a capped body shows the cap again.
+            ;; A fragment the user already read in full keeps the whole
+            ;; body through `:cap-expanded'.
+            (agent-shell-ui--apply-body-cap body-start body-end cap)
+            (save-restriction
+              (narrow-to-region body-start body-end)
+              (run-hooks 'agent-shell-ui-post-expand-fragment-at-point-hook)
+              ;; Rendering rewrites body chars, which drops the cap's
+              ;; `invisible' from any char it rewrote.
+              (agent-shell-ui--ensure-body-cap body-start body-end))))))))
 
 (defun agent-shell-ui-collapse-fragment-by-id (namespace-id block-id)
   "Collapse fragment with NAMESPACE-ID and BLOCK-ID."
@@ -1524,7 +1733,7 @@ Silent no-op when no fragment exists at or after point."
             (origin-id (map-elt (get-text-property origin 'agent-shell-ui-state)
                                 :qualified-id)))
         (goto-char target)
-        (agent-shell-ui--toggle-fragment-at-point)
+        (agent-shell-ui--toggle-fragment-at-point t)
         (when-let* (((and origin-id (equal origin-id target-id)))
                     (block (agent-shell-ui--block-range :position target)))
           (if (get-text-property origin 'invisible)

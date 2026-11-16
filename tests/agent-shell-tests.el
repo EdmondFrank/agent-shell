@@ -11103,3 +11103,40 @@ at or after point, which puts diagnostics from other lines at point."
 
 (provide 'agent-shell-tests)
 ;;; agent-shell-tests.el ends here
+
+(ert-deftest agent-shell--on-notification-thought-chunk-carries-max-height-test ()
+  "Thought chunks hand the body cap to the fragment writer.
+The cap travels with the first chunk, which creates the fragment, and
+with its streamed continuations, so batching a flush cannot drop it."
+  (with-temp-buffer
+    (let ((agent-shell--stream-render-interval 30)
+          (agent-shell-thought-process-max-height 3)
+          (state (agent-shell--make-state :buffer (current-buffer)))
+          (rendered nil))
+      (cl-letf (((symbol-function 'agent-shell--active-requests-p)
+                 (lambda (_state) t))
+                ((symbol-function 'agent-shell--append-transcript) #'ignore)
+                ((symbol-function 'agent-shell--thought-process-icon) #'ignore)
+                ((symbol-function 'agent-shell--refresh-activity-group-header)
+                 #'ignore)
+                ((symbol-function 'agent-shell--sync-activity-group-fold)
+                 #'ignore)
+                ((symbol-function 'agent-shell--update-fragment)
+                 (lambda (&rest args) (push args rendered))))
+        (dolist (text '("a" "b"))
+          (agent-shell--on-notification
+           :state state
+           :acp-notification `((method . "session/update")
+                               (params
+                                (update
+                                 (sessionUpdate . "agent_thought_chunk")
+                                 (content (type . "text") (text . ,text)))))))
+        (agent-shell--flush-stream-render state)
+        (should (= 2 (length rendered)))
+        ;; Latest call first: the batched continuation.
+        (should (equal 3 (plist-get (car rendered) :max-height)))
+        (should (plist-get (car rendered) :append))
+        (should (equal "b" (substring-no-properties
+                            (plist-get (car rendered) :body))))
+        (should (equal 3 (plist-get (cadr rendered) :max-height)))
+        (should-not (plist-get (cadr rendered) :append))))))

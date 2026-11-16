@@ -172,6 +172,20 @@ When non-nil, thought process sections are expanded."
   :type 'boolean
   :group 'agent-shell)
 
+(defcustom agent-shell-thought-process-max-height 15
+  "Maximum number of lines an expanded thought process section shows.
+
+Thoughts can run long, and a body left unbounded pushes the rest of the
+conversation off screen while it streams.  The body keeps its whole text
+(copying it, searching it, and the transcript are unaffected): lines
+past this many are hidden behind an ellipsis, and expanding the section
+again reveals them all.
+
+Set to nil to show thought bodies in full."
+  :type '(choice (const :tag "No limit" nil)
+                 (integer :tag "Lines"))
+  :group 'agent-shell)
+
 (defcustom agent-shell-tool-use-expand-by-default nil
   "Whether tool use sections should be expanded by default.
 
@@ -3643,6 +3657,7 @@ Clears STATE's `:expanded-activity-group'."
                     :group-label agent-shell--activity-group-label
                     :group-expanded (agent-shell--activity-group-initial-expanded-p)
                     :render-body-images t
+                    :max-height agent-shell-thought-process-max-height
                     :above-last-prompt (not (agent-shell--active-requests-p state)))
                    ;; Count this thought and relabel the header so a
                    ;; thought-only group reads "Thinking"/"Thought" instead of
@@ -3663,6 +3678,7 @@ Clears STATE's `:expanded-activity-group'."
                 :block-id (format "%s-agent_thought_chunk"
                                   (map-elt state :chunked-group-count))
                 :body body
+                :max-height agent-shell-thought-process-max-height
                 :above-last-prompt (not (agent-shell--active-requests-p state)))))
            (map-put! state :last-entry-type "agent_thought_chunk"))
           ((equal (map-nested-elt acp-notification '(params update sessionUpdate)) "user_message_chunk")
@@ -5757,7 +5773,8 @@ CHUNK is an alist like:
    :create-new (map-elt chunk :create-new)
    :navigation 'never
    :render-body-images t
-   :above-last-prompt (map-elt chunk :above-last-prompt)))
+   :above-last-prompt (map-elt chunk :above-last-prompt)
+   :max-height (map-elt chunk :max-height)))
 
 (defun agent-shell--flush-stream-render (state)
   "Render STATE's pending streamed text, if any."
@@ -5768,7 +5785,8 @@ CHUNK is an alist like:
     (agent-shell--render-streamed-chunk state pending)))
 
 (cl-defun agent-shell--update-streamed-fragment (&key state namespace-id block-id body
-                                                      create-new above-last-prompt)
+                                                      create-new above-last-prompt
+                                                      max-height)
   "Append BODY to streamed fragment BLOCK-ID in STATE.
 
 NAMESPACE-ID, CREATE-NEW, and ABOVE-LAST-PROMPT follow
@@ -5779,7 +5797,8 @@ different fragment or CREATE-NEW flushes the previous batch first."
                      (cons :block-id block-id)
                      (cons :body body)
                      (cons :create-new create-new)
-                     (cons :above-last-prompt above-last-prompt)))
+                     (cons :above-last-prompt above-last-prompt)
+                     (cons :max-height max-height)))
         (pending (map-elt state :stream-render-pending)))
     (cond
      ((not agent-shell--stream-render-interval)
@@ -5797,7 +5816,8 @@ different fragment or CREATE-NEW flushes the previous batch first."
 (cl-defun agent-shell--update-fragment (&key state namespace-id block-id label-left label-right
                                              body append create-new navigation expanded
                                              render-body-images above-last-prompt
-                                             group-id group-label (group-expanded t))
+                                             group-id group-label (group-expanded t)
+                                             max-height)
   "Update fragment in the shell buffer.
 
 Creates or updates existing dialog using STATE's request count as namespace
@@ -5818,7 +5838,11 @@ Programmatic fragment updates do not enter undo history.
 
 GROUP-ID nests this block under a collapsible group header, materialized
 from GROUP-LABEL on first use (see `agent-shell-ui-make-fragment-model'),
-with GROUP-EXPANDED as the group's initial fold state."
+with GROUP-EXPANDED as the group's initial fold state.
+
+MAX-HEIGHT caps how many body lines an expanded block shows, hiding the
+rest behind an ellipsis until it is expanded again (see
+`agent-shell-ui-make-fragment-model')."
   ;; Streamed text lands before this fragment, never after it.
   (agent-shell--flush-stream-render state)
   ;; A persistent prompt is live for the whole turn, so there is always one
@@ -5867,7 +5891,8 @@ with GROUP-EXPANDED as the group's initial fold state."
                              :body body
                              :group-id group-id
                              :group-label group-label
-                             :group-expanded group-expanded)
+                             :group-expanded group-expanded
+                             :max-height max-height)
                             :navigation navigation
                             :append append
                             :create-new create-new
@@ -5888,7 +5913,10 @@ with GROUP-EXPANDED as the group's initial fold state."
                 ;; rendered on expand via
                 ;; `agent-shell-ui-post-expand-fragment-at-point-hook'.
                 (unless (agent-shell-ui--body-invisible-p (point-min) (point-max))
-                  (agent-shell--render-markdown :render-images render-body-images))))
+                  (agent-shell--render-markdown :render-images render-body-images))
+                ;; Rendering rewrites body chars, dropping the cap's
+                ;; `invisible' from any char it rewrote.
+                (agent-shell-ui--ensure-body-cap body-start body-end)))
             ;; Note: For now, we're skipping applying markdown
             ;; on left labels as they currently carry propertized text
             ;; for statuses (ie. boxed).
@@ -5937,7 +5965,8 @@ with GROUP-EXPANDED as the group's initial fold state."
                               :body body
                               :group-id group-id
                               :group-label group-label
-                              :group-expanded group-expanded)
+                              :group-expanded group-expanded
+                              :max-height max-height)
                              :navigation navigation
                              :append append
                              :create-new create-new
@@ -5974,6 +6003,9 @@ with GROUP-EXPANDED as the group's initial fold state."
                ;; `agent-shell-ui-post-expand-fragment-at-point-hook'.
                (unless (agent-shell-ui--body-invisible-p (point-min) (point-max))
                  (agent-shell--render-markdown))
+               ;; Rendering rewrites body chars, dropping the cap's
+               ;; `invisible' from any char it rewrote.
+               (agent-shell-ui--ensure-body-cap body-start body-end)
                (widen))
              ;;
              ;; Note: For now, we're skipping applying markdown
