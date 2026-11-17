@@ -47,6 +47,7 @@ without creating tomorrow's conflict.
     agent-shell-fork-width.el      tool output line width cap (advice)
     agent-shell-fork-stream.el     streamed tool-output deltas (advice)
     agent-shell-fork-usage.el      usage summary on thought group headers
+    agent-shell-fork-skill.el      command payloads after a colon (advice)
     agent-shell-fork-session-title.el session title in the header (advice)
     overrides.eld                  generated: hash of every seam the fork uses
     bin/
@@ -304,6 +305,45 @@ without creating tomorrow's conflict.
    without the cap, 2.5s with it; the 18 866-character line alone went
    from 2.3s to 0.15s.
 
+** Command payloads after a colon
+
+   Upstream completes one token at the very start of the input, and only
+   when =/= sits immediately before that token.  A command whose name
+   carries a payload after a colon therefore cannot be completed past that
+   colon: AiderDesk's =/skill:<name> [prompt]= trigger completes to
+   =skill:pdf= at =/skill=, but =/skill:p= completes nothing, leaving the
+   name to be typed from memory.
+
+   The fork completes it.  The region stays the one upstream uses -- from
+   just after the =/= to point -- and once the token holds a =:=, the
+   candidates narrow to the advertised commands that begin with
+   =<prefix>:=, annotated with the description the agent sent for them.
+   So =/skill:p= completes to =skill:pdf=, the popup opened by =/= keeps
+   filtering as the colon is typed, and the colon pops the list by
+   itself when nothing is being completed.
+
+   The region is deliberately not narrowed to the payload alone.  A
+   completion UI filters candidates by the text between the region
+   bounds, so a zero-width region right after the colon has no prefix to
+   filter by, and Corfu drops such a session on its next continuation
+   check.  Covering the whole =<prefix>:<payload>= token keeps the region
+   non-empty from the first character after the colon onwards, with the
+   same start before and after it.
+
+   Two shapes of the advertised command list reach the capf: a list and,
+   as ACP's =availableCommands= decodes here, a vector.  The module walks
+   it with =mapc= for that reason: =dolist= signals =wrong-type-argument
+   listp= on a vector, which killed the popup the moment the colon asked
+   for candidates.
+
+   Nothing in the module knows what a skill is: the prefix is whatever the
+   agent advertised, so an agent whose commands carry no =<prefix>:name=
+   sees no change at all.
+
+   | Option                                     | Default | Does                                          |
+   |--------------------------------------------+---------+-----------------------------------------------|
+   | ~agent-shell-fork-skill-completion-enabled~  | ~t~     | Complete and pop a =<prefix>:<payload>= command |
+
 ** Usage summary on thought group headers
 
    A group header that holds a thought carries a compact usage suffix
@@ -439,6 +479,7 @@ without creating tomorrow's conflict.
   | Tool-output line width            | advice on ~agent-shell--truncate-tool-output-lines~ | advice  | supported     |
   | Usage summary                     | label-function wrap + usage advice          | data + advice   | supported     |
   | Session title in the header       | header model, header renderer and title setter advice | advice | supported      |
+  | Command payloads after a colon    | advice on ~agent-shell--command-completion-at-point~, ~agent-shell--trigger-completion-at-point~ | advice | supported |
   | Tree-sitter fenced blocks         | none yet                                    | *upstream edit* | *not ported*  |
 
   Every row but the last survives an upstream sync without a merge

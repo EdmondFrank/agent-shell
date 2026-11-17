@@ -64,4 +64,16 @@
          "session-title: appends the title to the SVG's bottom row")
         (agent-shell--set-session-title function #'agent-shell-fork-session-title--after-set-title
          "c5424c0b006f97c7375e54f1cae5c410a01f79a90a932989a091d0e228311697"
-         "session-title: repaints the header when a title lands")))
+         "session-title: repaints the header when a title lands")
+        (agent-shell--command-completion-at-point function #'agent-shell-fork-skill--completion-around
+         "439716d0920625cde708bc29f1658414f2c5f38b966581bcd3701daed369c60d"
+         "skill: completes a `<prefix>:<payload>' command, colon included")
+        (agent-shell--trigger-completion-at-point function #'agent-shell-fork-skill--trigger-around
+         "3f17abdf4401d98b2bdcbe7a97d188710a9cf8c23d39479b31657cc92f6f2eb3"
+         "skill: pops it when the colon is typed and nothing is active")
+        (agent-shell-completion--input-start function nil
+         "2cf802fcb5046468b2129a6b1fae2031a94fabefeaba445fc8f0d7ffaa2a94a5"
+         "skill: finds where the prompt input being composed begins")
+        (agent-shell-completion--source-buffer function nil
+         "a64c51407e8429571a8b4948d80d46372cb8bc78b3f8f37e5f83fab594c234e0"
+         "skill: finds the buffer whose session commands to complete")))

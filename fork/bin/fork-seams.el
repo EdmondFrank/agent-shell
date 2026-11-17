@@ -69,7 +69,19 @@
      "session-title: appends the title to the SVG's bottom row")
     (agent-shell--set-session-title
      function agent-shell-fork-session-title--after-set-title
-     "session-title: repaints the header when a title lands"))
+     "session-title: repaints the header when a title lands")
+    (agent-shell--command-completion-at-point
+     function agent-shell-fork-skill--completion-around
+     "skill: completes a `<prefix>:<payload>' command, colon included")
+    (agent-shell--trigger-completion-at-point
+     function agent-shell-fork-skill--trigger-around
+     "skill: pops it when the colon is typed and nothing is active")
+    (agent-shell-completion--input-start
+     function nil
+     "skill: finds where the prompt input being composed begins")
+    (agent-shell-completion--source-buffer
+     function nil
+     "skill: finds the buffer whose session commands to complete"))
   "Upstream definitions the fork depends on, with what it uses them for.")
 
 (defun fork-seam-source (symbol kind)
