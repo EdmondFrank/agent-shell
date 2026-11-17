@@ -52,4 +52,16 @@
          "util: re-hides the body's trailing newlines")
         (agent-shell-ui--set-group-collapsed function nil
          "55b64a8d7354541e2ba81a99d6fb35756529013af7586b45c465877959e708eb"
-         "cap: group folding re-applies each child's state")))
+         "cap: group folding re-applies each child's state")
+        (agent-shell--make-header-model function #'agent-shell-fork-session-title--make-header-model
+         "b7ae2a11d3d148290e9f98481a1879e591a7bc2f6071d81dee15568b127e007e"
+         "session-title: adds the session title to every header's model")
+        (agent-shell--render-header-model-uncached function #'agent-shell-fork-session-title--render-header
+         "0cebdeda30e6837993173165e0fe2bd2edafc9ed34e5f86d77befd3e1328b207"
+         "session-title: splices the title into a text header")
+        (agent-shell--svg-content-width function #'agent-shell-fork-session-title--svg-content-width
+         "9e6a26daa2f5de04708478c4ed2510131b7cc5425ce1ce5cf73912c192df6756"
+         "session-title: appends the title to the SVG's bottom row")
+        (agent-shell--set-session-title function #'agent-shell-fork-session-title--after-set-title
+         "c5424c0b006f97c7375e54f1cae5c410a01f79a90a932989a091d0e228311697"
+         "session-title: repaints the header when a title lands")))

@@ -39,6 +39,7 @@
 ;;   fork/agent-shell-fork-width.el      tool output line width cap (advice)
 ;;   fork/agent-shell-fork-markdown.el   tree-sitter fenced-block rendering
 ;;   fork/agent-shell-fork-usage.el      usage summary in group headers
+;;   fork/agent-shell-fork-session-title.el session title in the header
 ;;   fork/overrides.eld                  advice/override manifest (drift)
 ;;
 ;; Load from your init:
@@ -79,7 +80,8 @@
                    agent-shell-fork-stream
                    agent-shell-fork-width
                    agent-shell-fork-markdown
-                   agent-shell-fork-usage))
+                   agent-shell-fork-usage
+                   agent-shell-fork-session-title))
   (require feature nil t))
 
 (provide 'agent-shell-fork)

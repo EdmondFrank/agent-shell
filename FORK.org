@@ -47,6 +47,7 @@ without creating tomorrow's conflict.
     agent-shell-fork-width.el      tool output line width cap (advice)
     agent-shell-fork-stream.el     streamed tool-output deltas (advice)
     agent-shell-fork-usage.el      usage summary on thought group headers
+    agent-shell-fork-session-title.el session title in the header (advice)
     overrides.eld                  generated: hash of every seam the fork uses
     bin/
       fork-sync                    merge upstream, report drift, test, tag
@@ -58,6 +59,7 @@ without creating tomorrow's conflict.
     agent-shell-fork-aiderdesk-tests.el
     agent-shell-fork-cap-tests.el
     agent-shell-fork-params-tests.el
+    agent-shell-fork-session-title-tests.el
     agent-shell-fork-stream-tests.el
     agent-shell-fork-tool-style-tests.el
     agent-shell-fork-width-tests.el
@@ -114,6 +116,38 @@ without creating tomorrow's conflict.
 
    The agent also appears in the ordinary agent picker, because it is
    appended to ~agent-shell-agent-configs~.
+
+** Session title in the header
+
+   ACP agents name a session: AiderDesk reports its task name with
+   ~session_info_update~, and agent-shell stores it in
+   ~(:session :title)~ for the session picker.  The fork paints it too,
+   at the top of the chat window: on the header, right after the project
+   directory.
+
+   #+begin_example
+   AiderDesk ➤ Sonnet 4.5 ➤ Edit
+   1/12 ➤ agent-shell ➤ Fix the header title
+   #+end_example
+
+   An agent that never reports a title has its first prompt seeded as
+   one by agent-shell, so every session shows something.  Only that
+   prompt's first line is used, runs of whitespace collapse, and the
+   title is shortened past
+   ~agent-shell-fork-session-title-max-width~ characters.
+
+   The title lives in the header model, which both the shell buffer and
+   the viewport render, so it reaches every header.  A title that lands
+   mid-session repaints both; a full update is required because the
+   heartbeat path reuses the last header model and refreshes only the
+   busy frame.  The graphical header draws the title into the SVG's
+   bottom row (growing the image to hold it), while the text style
+   splices it into the header string.
+
+   | Option                                    | Default | Does                                 |
+   |-------------------------------------------+---------+--------------------------------------|
+   | ~agent-shell-fork-session-title~            | ~t~     | Show the session title in the header |
+   | ~agent-shell-fork-session-title-max-width~  | ~40~    | Characters before it is shortened    |
 
 ** Tool parameters while a call runs
 
@@ -404,6 +438,7 @@ without creating tomorrow's conflict.
   | Compact tool-call labels          | advice on ~agent-shell--update-fragment~, ~agent-shell--save-tool-call~ | advice | supported |
   | Tool-output line width            | advice on ~agent-shell--truncate-tool-output-lines~ | advice  | supported     |
   | Usage summary                     | label-function wrap + usage advice          | data + advice   | supported     |
+  | Session title in the header       | header model, header renderer and title setter advice | advice | supported      |
   | Tree-sitter fenced blocks         | none yet                                    | *upstream edit* | *not ported*  |
 
   Every row but the last survives an upstream sync without a merge
@@ -415,7 +450,7 @@ without creating tomorrow's conflict.
   fork/bin/run-tests        # whole ERT suite with the overlay loaded
   #+end_src
 
-  Baseline on this machine (macOS, Emacs 29.4): 1095 tests, 19 unexpected.
+  Baseline on this machine (macOS, Emacs 29.4): 1127 tests, 19 unexpected.
   Eighteen are environmental (graphical header, session-list fakes,
   elicitation capability, type-ahead restore) and pre-date the fork.  The
   nineteenth is by design: ~agent-shell--truncate-tool-output-lines-test~

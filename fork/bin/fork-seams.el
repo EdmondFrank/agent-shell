@@ -57,7 +57,19 @@
      "util: re-hides the body's trailing newlines")
     (agent-shell-ui--set-group-collapsed
      function nil
-     "cap: group folding re-applies each child's state"))
+     "cap: group folding re-applies each child's state")
+    (agent-shell--make-header-model
+     function agent-shell-fork-session-title--make-header-model
+     "session-title: adds the session title to every header's model")
+    (agent-shell--render-header-model-uncached
+     function agent-shell-fork-session-title--render-header
+     "session-title: splices the title into a text header")
+    (agent-shell--svg-content-width
+     function agent-shell-fork-session-title--svg-content-width
+     "session-title: appends the title to the SVG's bottom row")
+    (agent-shell--set-session-title
+     function agent-shell-fork-session-title--after-set-title
+     "session-title: repaints the header when a title lands"))
   "Upstream definitions the fork depends on, with what it uses them for.")
 
 (defun fork-seam-source (symbol kind)
