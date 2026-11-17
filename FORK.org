@@ -43,6 +43,8 @@ without creating tomorrow's conflict.
     agent-shell-fork-aiderdesk.el  AiderDesk agent definition and input history
     agent-shell-fork-util.el       locating a fragment's body from its model
     agent-shell-fork-cap.el        body height caps (advice)
+    agent-shell-fork-params.el     tool parameters while a call runs (advice)
+    agent-shell-fork-width.el      tool output line width cap (advice)
     agent-shell-fork-stream.el     streamed tool-output deltas (advice)
     agent-shell-fork-usage.el      usage summary on thought group headers
     overrides.eld                  generated: hash of every seam the fork uses
@@ -55,6 +57,7 @@ without creating tomorrow's conflict.
   tests/
     agent-shell-fork-aiderdesk-tests.el
     agent-shell-fork-cap-tests.el
+    agent-shell-fork-params-tests.el
     agent-shell-fork-stream-tests.el
     agent-shell-fork-width-tests.el
     agent-shell-fork-usage-tests.el
@@ -110,6 +113,37 @@ without creating tomorrow's conflict.
 
    The agent also appears in the ordinary agent picker, because it is
    appended to ~agent-shell-agent-configs~.
+
+** Tool parameters while a call runs
+
+   AiderDesk sends a tool call's arguments in its ~rawInput~ but leaves
+   the fragment body empty until the call ends, so a running call is a
+   bare label (~Code_mode~, ~Execute_command~) with nothing to say what
+   it is doing.  The fork gives the fragment its arguments as a fenced
+   block when it first appears; upstream's own rendering replaces it
+   with the call's output when the call finishes.
+
+   A single string argument renders as a bare fence, several as
+   pretty-printed JSON -- the same shapes upstream uses for tool-call
+   permission dialogs.  The block is an ordinary tool body, so
+   ~agent-shell-fork-tool-max-height~ caps its height and
+   ~agent-shell-fork-tool-max-line-width~ its lines.
+
+   | Option                                | Default | Does                                            |
+   |---------------------------------------+---------+-------------------------------------------------|
+   | ~agent-shell-fork-tool-params-expanded~ | ~t~     | Show the parameters without toggling the section |
+
+   Nil leaves upstream's folded default, putting the parameters one
+   toggle away; the output that replaces them keeps whatever fold state
+   the fragment started with.
+
+   Only the AiderDesk agent is affected.  Agents that already put the
+   arguments in the label (Pi's execute calls carry the whole command
+   there) would only gain a taller fragment.
+
+   The bridge names the call after its argument as well
+   (~Bash: rtk git status~, ~Code_mode: local r = …~), so the
+   label identifies the work even with the body folded.
 
 ** Capped expanded sections
 
@@ -321,12 +355,13 @@ without creating tomorrow's conflict.
   | Body caps                         | advice on ~agent-shell-ui-update-fragment~ | advice          | supported     |
   |                                   | advice on ~agent-shell-ui-toggle-fragment~ | advice          | supported     |
   | Streamed deltas                   | ~:filter-args~ on the same update call      | advice          | supported     |
+  | Tool parameters while running     | advice on ~agent-shell--update-fragment~    | advice          | supported     |
   | Tool-output line width            | advice on ~agent-shell--truncate-tool-output-lines~ | advice  | supported     |
   | Usage summary                     | label-function wrap + usage advice          | data + advice   | supported     |
   | Tree-sitter fenced blocks         | none yet                                    | *upstream edit* | *not ported*  |
 
-  Everything in the first four rows survives an upstream sync without a
-  merge conflict; the last row is the one file to watch.
+  Every row but the last survives an upstream sync without a merge
+  conflict; the last row is the one file to watch.
 
 * Verifying a checkout
 
@@ -334,7 +369,7 @@ without creating tomorrow's conflict.
   fork/bin/run-tests        # whole ERT suite with the overlay loaded
   #+end_src
 
-  Baseline on this machine (macOS, Emacs 29.4): 1087 tests, 19 unexpected.
+  Baseline on this machine (macOS, Emacs 29.4): 1095 tests, 19 unexpected.
   Eighteen are environmental (graphical header, session-list fakes,
   elicitation capability, type-ahead restore) and pre-date the fork.  The
   nineteenth is by design: ~agent-shell--truncate-tool-output-lines-test~
