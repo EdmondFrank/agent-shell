@@ -17,6 +17,12 @@
         (agent-shell--update-fragment function #'agent-shell-fork-params--filter-args
          "5947f64d15e197e2c88bae84d27a2ceb4212c12401c8a4b12f3ebee445311376"
          "params: gives a starting tool call its arguments as the body")
+        (agent-shell--update-fragment function #'agent-shell-fork-tool-style--filter-args
+         "5947f64d15e197e2c88bae84d27a2ceb4212c12401c8a4b12f3ebee445311376"
+         "tool-style: presents a call's name, argument, duration and outcome")
+        (agent-shell--save-tool-call function #'agent-shell-fork-tool-style--stamp-start
+         "c1d4bf11b69b4362dc658505de34e4a53340f23a01805ebcc8ae7b7ba4b0640d"
+         "tool-style: records when a tool call started, for its duration")
         (agent-shell--truncate-tool-output-lines function #'agent-shell-fork-width--around
          "a62a5343c01d701c9bd622053d2f4c427fc1d88de7398b55beff199df5230c19"
          "width: shortens tool output lines before they render")

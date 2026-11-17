@@ -22,6 +22,12 @@
     (agent-shell--update-fragment
      function agent-shell-fork-params--filter-args
      "params: gives a starting tool call its arguments as the body")
+    (agent-shell--update-fragment
+     function agent-shell-fork-tool-style--filter-args
+     "tool-style: presents a call's name, argument, duration and outcome")
+    (agent-shell--save-tool-call
+     function agent-shell-fork-tool-style--stamp-start
+     "tool-style: records when a tool call started, for its duration")
     (agent-shell--truncate-tool-output-lines
      function agent-shell-fork-width--around
      "width: shortens tool output lines before they render")

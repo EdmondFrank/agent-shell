@@ -59,6 +59,7 @@ without creating tomorrow's conflict.
     agent-shell-fork-cap-tests.el
     agent-shell-fork-params-tests.el
     agent-shell-fork-stream-tests.el
+    agent-shell-fork-tool-style-tests.el
     agent-shell-fork-width-tests.el
     agent-shell-fork-usage-tests.el
   #+end_src
@@ -144,6 +145,50 @@ without creating tomorrow's conflict.
    The bridge names the call after its argument as well
    (~Bash: rtk git status~, ~Code_mode: local r = …~), so the
    label identifies the work even with the body folded.
+
+** Compact tool-call labels
+
+   AiderDesk reports ACP's catch-all kind ~other~ for most of its tools,
+   so upstream's label opens with a kind that says nothing and then
+   truncates the bridge's title mid-token:
+
+   #+begin_example
+   ✓ Other  Code_mode: local r = parallel_all({ …
+   #+end_example
+
+   The fork presents the call the way the agent CLIs do -- Claude Code's
+   ~⏺ Bash(…)~, Codex's ~• Ran …~ and OpenCode's ~✓ bash 1.2s~ each keep a
+   call to one line that carries its outcome:
+
+   #+begin_example
+   ✓ Code Mode `emacs__emacs_read_buffer` · 0.4s · 132 lines
+   #+end_example
+
+   The name comes from the bridge's title (~Code_mode: …~), the argument
+   from the rest of that title (or from the first argument that says what
+   the call is doing), and the suffix from the time the call took plus how
+   it ended: an exit code, ~error~, or the number of lines it produced.
+   The argument sits in a code span, because a label is rendered as
+   markdown and an unquoted ~tools["a"]~ would lose its brackets to link
+   syntax.
+
+   | Option                                       | Default | Does                                |
+   |----------------------------------------------+---------+-------------------------------------|
+   | ~agent-shell-fork-tool-style-compact-label~    | ~t~     | Name/argument/outcome label         |
+   | ~agent-shell-fork-tool-style-target-max-width~ | ~60~    | Columns the argument may take       |
+   | ~agent-shell-fork-tool-style-show-duration~    | ~t~     | Append the elapsed time             |
+   | ~agent-shell-fork-tool-style-show-summary~     | ~t~     | Append the outcome                  |
+   | ~agent-shell-fork-tool-style-unwrap-json~      | ~t~     | Unwrap an old JSON result envelope  |
+
+   A replayed session sends a call's start and its end back to back, so a
+   duration under 50ms is left out.  Questionnaires and permission dialogs
+   keep upstream's rendering, and other agents are untouched.
+
+   The matching bridge (~aiderdesk-acp-bridge~ 0.3.3 and later) sends a
+   call's output as ACP content, no longer echoes the arguments there, and
+   unwraps an MCP result's text instead of re-encoding it as JSON.
+   ~agent-shell-fork-tool-style-unwrap-json~ covers a session replayed from
+   an older bridge.
 
 ** Capped expanded sections
 
@@ -356,6 +401,7 @@ without creating tomorrow's conflict.
   |                                   | advice on ~agent-shell-ui-toggle-fragment~ | advice          | supported     |
   | Streamed deltas                   | ~:filter-args~ on the same update call      | advice          | supported     |
   | Tool parameters while running     | advice on ~agent-shell--update-fragment~    | advice          | supported     |
+  | Compact tool-call labels          | advice on ~agent-shell--update-fragment~, ~agent-shell--save-tool-call~ | advice | supported |
   | Tool-output line width            | advice on ~agent-shell--truncate-tool-output-lines~ | advice  | supported     |
   | Usage summary                     | label-function wrap + usage advice          | data + advice   | supported     |
   | Tree-sitter fenced blocks         | none yet                                    | *upstream edit* | *not ported*  |
