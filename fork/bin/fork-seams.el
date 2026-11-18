@@ -37,15 +37,6 @@
     (agent-shell-ui--toggle-leaf-fragment-at-point
      function agent-shell-fork-cap--after-toggle
      "cap: expanding a folded body keeps it uncapped")
-    (agent-shell--save-usage
-     function agent-shell-fork-usage--after-save-usage
-     "usage: refresh the thought group header when a turn's usage lands")
-    (agent-shell--update-usage-from-notification
-     function agent-shell-fork-usage--after-notification
-     "usage: refresh the thought group header on a usage_update")
-    (agent-shell-activity-group-header-label-function
-     variable nil
-     "usage: wrapped to append the usage summary")
     (agent-shell-ui--cached-block
      function nil
      "util: locates a fragment's block by qualified id")

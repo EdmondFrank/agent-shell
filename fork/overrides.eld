@@ -32,15 +32,6 @@
         (agent-shell-ui--toggle-leaf-fragment-at-point function #'agent-shell-fork-cap--after-toggle
          "1d7c6071f2c678e26c62f61f144b38bd97993b371b8492ff1a9f34772e8c4e45"
          "cap: expanding a folded body keeps it uncapped")
-        (agent-shell--save-usage function #'agent-shell-fork-usage--after-save-usage
-         "cf100d833644f9c87fc0cace1fcde124cf89fba120f90105252a5794bcc3fa61"
-         "usage: refresh the thought group header when a turn's usage lands")
-        (agent-shell--update-usage-from-notification function #'agent-shell-fork-usage--after-notification
-         "4644636e26640db9bae99fd2305cc5c1c560bac86570a881a88f1d63f5da76b4"
-         "usage: refresh the thought group header on a usage_update")
-        (agent-shell-activity-group-header-label-function variable nil
-         "3e63a591999886a75fa8aff8bc4bee4372ec0691f549fa8d54578aee189f0548"
-         "usage: wrapped to append the usage summary")
         (agent-shell-ui--cached-block function nil
          "34e0b72c78670fffccc2088b4dc843ffc57a0b2e3ccbbacf65cd5138345a1fc5"
          "util: locates a fragment's block by qualified id")

@@ -46,7 +46,6 @@ without creating tomorrow's conflict.
     agent-shell-fork-params.el     tool parameters, live and after the call (advice)
     agent-shell-fork-width.el      tool output line width cap (advice)
     agent-shell-fork-stream.el     streamed tool-output deltas (advice)
-    agent-shell-fork-usage.el      usage summary on thought group headers
     agent-shell-fork-skill.el      command payloads after a colon (advice)
     agent-shell-fork-session-title.el session title in the header (advice)
     overrides.eld                  generated: hash of every seam the fork uses
@@ -64,7 +63,6 @@ without creating tomorrow's conflict.
     agent-shell-fork-stream-tests.el
     agent-shell-fork-tool-style-tests.el
     agent-shell-fork-width-tests.el
-    agent-shell-fork-usage-tests.el
   #+end_src
 
   Load it from your init:
@@ -353,13 +351,6 @@ without creating tomorrow's conflict.
    |--------------------------------------------+---------+-----------------------------------------------|
    | ~agent-shell-fork-skill-completion-enabled~  | ~t~     | Complete and pop a =<prefix>:<payload>= command |
 
-** Usage summary on thought group headers
-
-   A group header that holds a thought carries a compact usage suffix
-   (~Context: 45k/200k, Tokens: 92k in · 12k out, Cost: $0.06~) that
-   tracks the live usage data, so cost and context are visible where the
-   work is rather than only in the header line.
-
 * Still diverging
 
   =agent-shell-markdown.el= (and its fork blocks in
@@ -486,7 +477,6 @@ without creating tomorrow's conflict.
   | Tool parameters, live and after   | advice on ~agent-shell--update-fragment~    | advice          | supported     |
   | Compact tool-call labels          | advice on ~agent-shell--update-fragment~, ~agent-shell--save-tool-call~ | advice | supported |
   | Tool-output line width            | advice on ~agent-shell--truncate-tool-output-lines~ | advice  | supported     |
-  | Usage summary                     | label-function wrap + usage advice          | data + advice   | supported     |
   | Session title in the header       | header model, header renderer and title setter advice | advice | supported      |
   | Command payloads after a colon    | advice on ~agent-shell--command-completion-at-point~, ~agent-shell--trigger-completion-at-point~ | advice | supported |
   | Tree-sitter fenced blocks         | none yet                                    | *upstream edit* | *not ported*  |
