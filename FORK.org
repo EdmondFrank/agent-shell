@@ -43,7 +43,7 @@ without creating tomorrow's conflict.
     agent-shell-fork-aiderdesk.el  AiderDesk agent definition and input history
     agent-shell-fork-util.el       locating a fragment's body from its model
     agent-shell-fork-cap.el        body height caps (advice)
-    agent-shell-fork-params.el     tool parameters while a call runs (advice)
+    agent-shell-fork-params.el     tool parameters, live and after the call (advice)
     agent-shell-fork-width.el      tool output line width cap (advice)
     agent-shell-fork-stream.el     streamed tool-output deltas (advice)
     agent-shell-fork-usage.el      usage summary on thought group headers
@@ -150,28 +150,37 @@ without creating tomorrow's conflict.
    | ~agent-shell-fork-session-title~            | ~t~     | Show the session title in the header |
    | ~agent-shell-fork-session-title-max-width~  | ~40~    | Characters before it is shortened    |
 
-** Tool parameters while a call runs
+** Tool parameters, live and after the call
 
    AiderDesk sends a tool call's arguments in its ~rawInput~ but leaves
    the fragment body empty until the call ends, so a running call is a
    bare label (~Code_mode~, ~Execute_command~) with nothing to say what
    it is doing.  The fork gives the fragment its arguments as a fenced
-   block when it first appears; upstream's own rendering replaces it
-   with the call's output when the call finishes.
+   block when it first appears, and keeps them there once it finishes.
+
+   Upstream's own argument block covers only the catch-all kind ~other~.
+   AiderDesk reports a real kind for most of its tools (~execute~ for
+   ~code_mode~, ~read~, ~search~, ...), so upstream's terminal update
+   replaced the body with the output alone and a finished call lost the
+   parameters it had just shown.  The output -- what upstream would put
+   in that body -- now renders in a label-less fragment right below the
+   arguments, so the two keep their own fold state and their own share
+   of the cap: a long script no longer pushes the output out of the
+   capped view.
 
    A single string argument renders as a bare fence, several as
    pretty-printed JSON -- the same shapes upstream uses for tool-call
-   permission dialogs.  The block is an ordinary tool body, so
-   ~agent-shell-fork-tool-max-height~ caps its height and
-   ~agent-shell-fork-tool-max-line-width~ its lines.
+   permission dialogs.  Both are ordinary tool bodies, so
+   ~agent-shell-fork-tool-max-height~ caps each of them and
+   ~agent-shell-fork-tool-max-line-width~ their lines.
 
    | Option                                | Default | Does                                            |
    |---------------------------------------+---------+-------------------------------------------------|
    | ~agent-shell-fork-tool-params-expanded~ | ~t~     | Show the parameters without toggling the section |
 
    Nil leaves upstream's folded default, putting the parameters one
-   toggle away; the output that replaces them keeps whatever fold state
-   the fragment started with.
+   toggle away; the arguments that replace the running body keep
+   whatever fold state the fragment started with.
 
    Only the AiderDesk agent is affected.  Agents that already put the
    arguments in the label (Pi's execute calls carry the whole command
@@ -474,7 +483,7 @@ without creating tomorrow's conflict.
   | Body caps                         | advice on ~agent-shell-ui-update-fragment~ | advice          | supported     |
   |                                   | advice on ~agent-shell-ui-toggle-fragment~ | advice          | supported     |
   | Streamed deltas                   | ~:filter-args~ on the same update call      | advice          | supported     |
-  | Tool parameters while running     | advice on ~agent-shell--update-fragment~    | advice          | supported     |
+  | Tool parameters, live and after   | advice on ~agent-shell--update-fragment~    | advice          | supported     |
   | Compact tool-call labels          | advice on ~agent-shell--update-fragment~, ~agent-shell--save-tool-call~ | advice | supported |
   | Tool-output line width            | advice on ~agent-shell--truncate-tool-output-lines~ | advice  | supported     |
   | Usage summary                     | label-function wrap + usage advice          | data + advice   | supported     |

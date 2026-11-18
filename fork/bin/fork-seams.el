@@ -20,8 +20,8 @@
      function agent-shell-fork-stream--filter-args
      "stream: turns a grown body into an append")
     (agent-shell--update-fragment
-     function agent-shell-fork-params--filter-args
-     "params: gives a starting tool call its arguments as the body")
+     function agent-shell-fork-params--around
+     "params: keeps a call's arguments in its body, its output below")
     (agent-shell--update-fragment
      function agent-shell-fork-tool-style--filter-args
      "tool-style: presents a call's name, argument, duration and outcome")

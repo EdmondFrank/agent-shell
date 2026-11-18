@@ -14,9 +14,9 @@
         (agent-shell-ui-update-fragment function #'agent-shell-fork-stream--filter-args
          "3afe1d20fce5d955c76847eb01cd2604774aac5926d79354de3b630c498451d8"
          "stream: turns a grown body into an append")
-        (agent-shell--update-fragment function #'agent-shell-fork-params--filter-args
+        (agent-shell--update-fragment function #'agent-shell-fork-params--around
          "5947f64d15e197e2c88bae84d27a2ceb4212c12401c8a4b12f3ebee445311376"
-         "params: gives a starting tool call its arguments as the body")
+         "params: keeps a call's arguments in its body, its output below")
         (agent-shell--update-fragment function #'agent-shell-fork-tool-style--filter-args
          "5947f64d15e197e2c88bae84d27a2ceb4212c12401c8a4b12f3ebee445311376"
          "tool-style: presents a call's name, argument, duration and outcome")
